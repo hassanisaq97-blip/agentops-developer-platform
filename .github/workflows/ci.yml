@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.12
+      - run: uv venv && uv pip install -e . --group dev
+      - run: source .venv/bin/activate && ruff check src tests scripts migrations
+      - run: source .venv/bin/activate && ruff format --check src tests scripts migrations
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.12
+      - run: uv venv && uv pip install -e . --group dev
+      - run: source .venv/bin/activate && mypy src/agentops
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.12
+      - run: uv venv && uv pip install -e . --group dev
+      - run: |
+          source .venv/bin/activate
+          git config --global user.email "ci@agentops.local"
+          git config --global user.name "CI Runner"
+          pytest tests -m "not integration" -q --cov=src/agentops --cov-report=term-missing --cov-report=xml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: agentops
+          POSTGRES_PASSWORD: agentops
+          POSTGRES_DB: agentops
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U agentops"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://agentops:agentops@localhost:5432/agentops
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.12
+      - run: uv venv && uv pip install -e . --group dev
+      - run: |
+          source .venv/bin/activate
+          git config --global user.email "ci@agentops.local"
+          git config --global user.name "CI Runner"
+          pytest tests -m integration -q
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, unit-tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - run: docker compose config
+      - name: Byg API-image
+        run: docker build -f docker/api.Dockerfile -t agentops-api:ci .
+      - name: Byg MLflow-image
+        run: docker build -f docker/mlflow.Dockerfile -t agentops-mlflow:ci .
+
+  ai-quality-gate:
+    runs-on: ubuntu-latest
+    needs: [unit-tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.12
+      - run: uv venv && uv pip install -e . --group dev
+      - run: |
+          source .venv/bin/activate
+          git config --global user.email "ci@agentops.local"
+          git config --global user.name "CI Runner"
+          python scripts/run_evals.py --provider test
+        # Deterministiske evals — ingen API-nøgle nødvendig, ingen omkostning.
+        # Se .github/workflows/evals-llm.yml for den separate, dyre kørsel mod en rigtig LLM.

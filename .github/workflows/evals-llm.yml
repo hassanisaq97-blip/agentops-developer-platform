@@ -1,0 +1,41 @@
+name: Real-LLM Evaluations (manuel/dyr)
+
+# Adskilt fra den almindelige CI (.github/workflows/ci.yml), fordi denne
+# workflow foretager RIGTIGE API-kald til en betalt LLM-provider. Den kører
+# ALDRIG automatisk på push/PR — kun når nogen eksplicit trigger den, eller
+# efter en fast tidsplan hvis det aktiveres.
+#
+# Kræver et repository secret ANTHROPIC_API_KEY. Uden det fejler jobbet
+# tydeligt i stedet for at falde stille tilbage til den deterministiske
+# provider — det ville give et falsk indtryk af, at en rigtig model blev testet.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  real-provider-evals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.12
+      - run: uv venv && uv pip install -e . --group dev
+      - name: Verificér at ANTHROPIC_API_KEY er sat
+        run: |
+          if [ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "::error::ANTHROPIC_API_KEY er ikke konfigureret som repository secret."
+            exit 1
+          fi
+      - name: Kør benchmark-suiten mod Anthropic
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LLM_DEFAULT_PROVIDER: anthropic
+        run: |
+          source .venv/bin/activate
+          git config --global user.email "ci@agentops.local"
+          git config --global user.name "CI Runner"
+          python scripts/run_evals.py --provider anthropic
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: evals/results/*.json
