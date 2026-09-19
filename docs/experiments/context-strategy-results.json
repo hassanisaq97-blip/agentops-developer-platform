@@ -1,0 +1,67 @@
+{
+  "case_id": "fix_failing_test_add",
+  "results": [
+    {
+      "strategy": "minimal",
+      "system_prompt_chars": 96,
+      "has_tools": false,
+      "status": "completed",
+      "total_tool_calls": 0,
+      "tools_used": [],
+      "tests_passed": null,
+      "tests_failed": null,
+      "input_tokens": 22,
+      "output_tokens": 14
+    },
+    {
+      "strategy": "claude_md",
+      "system_prompt_chars": 334,
+      "has_tools": false,
+      "status": "completed",
+      "total_tool_calls": 0,
+      "tools_used": [],
+      "tests_passed": null,
+      "tests_failed": null,
+      "input_tokens": 22,
+      "output_tokens": 14
+    },
+    {
+      "strategy": "targeted_mcp",
+      "system_prompt_chars": 334,
+      "has_tools": true,
+      "status": "completed",
+      "total_tool_calls": 6,
+      "tools_used": [
+        "get_repository_status",
+        "run_tests",
+        "search_code",
+        "read_file",
+        "apply_patch",
+        "run_tests"
+      ],
+      "tests_passed": 2,
+      "tests_failed": 0,
+      "input_tokens": 686,
+      "output_tokens": 29
+    },
+    {
+      "strategy": "optimized",
+      "system_prompt_chars": 484,
+      "has_tools": true,
+      "status": "completed",
+      "total_tool_calls": 6,
+      "tools_used": [
+        "get_repository_status",
+        "run_tests",
+        "search_code",
+        "read_file",
+        "apply_patch",
+        "run_tests"
+      ],
+      "tests_passed": 2,
+      "tests_failed": 0,
+      "input_tokens": 686,
+      "output_tokens": 29
+    }
+  ]
+}

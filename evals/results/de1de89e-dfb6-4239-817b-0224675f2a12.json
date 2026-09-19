@@ -1,0 +1,106 @@
+{
+  "run_id": "de1de89e-dfb6-4239-817b-0224675f2a12",
+  "provider": "test",
+  "model": "varies-per-case",
+  "context_strategy": "varies-per-case",
+  "started_at": "2026-09-19T22:50:24.221589Z",
+  "finished_at": "2026-09-19T22:50:31.125014Z",
+  "case_results": [
+    {
+      "case_id": "fix_failing_test_add",
+      "fixture": "fix_failing_test_add",
+      "provider": "test",
+      "model": "deterministic-v1",
+      "context_strategy": "targeted_mcp",
+      "metrics": {
+        "success": true,
+        "status": "completed",
+        "tests_run": true,
+        "tests_passed": 2,
+        "tests_failed": 0,
+        "total_tool_calls": 6,
+        "files_changed_count": 1,
+        "unnecessary_files_changed": 0,
+        "latency_ms": 0.09385899966218858,
+        "input_tokens": 686,
+        "output_tokens": 29,
+        "used_fallback": false,
+        "error": null
+      },
+      "expected_success": true,
+      "matched_expectation": true
+    },
+    {
+      "case_id": "fix_failing_test_format",
+      "fixture": "fix_failing_test_format",
+      "provider": "test",
+      "model": "deterministic-v1",
+      "context_strategy": "targeted_mcp",
+      "metrics": {
+        "success": false,
+        "status": "completed",
+        "tests_run": true,
+        "tests_passed": 1,
+        "tests_failed": 1,
+        "total_tool_calls": 4,
+        "files_changed_count": 0,
+        "unnecessary_files_changed": 0,
+        "latency_ms": 0.2900919994317519,
+        "input_tokens": 953,
+        "output_tokens": 130,
+        "used_fallback": false,
+        "error": null
+      },
+      "expected_success": false,
+      "matched_expectation": true
+    },
+    {
+      "case_id": "find_auth_function",
+      "fixture": "find_auth_function",
+      "provider": "test",
+      "model": "deterministic-v1",
+      "context_strategy": "targeted_mcp",
+      "metrics": {
+        "success": false,
+        "status": "completed",
+        "tests_run": true,
+        "tests_passed": 1,
+        "tests_failed": 0,
+        "total_tool_calls": 2,
+        "files_changed_count": 0,
+        "unnecessary_files_changed": 0,
+        "latency_ms": 0.12065800046912045,
+        "input_tokens": 167,
+        "output_tokens": 44,
+        "used_fallback": false,
+        "error": null
+      },
+      "expected_success": false,
+      "matched_expectation": true
+    },
+    {
+      "case_id": "explain_report_module",
+      "fixture": "explain_report_module",
+      "provider": "test",
+      "model": "deterministic-v1",
+      "context_strategy": "targeted_mcp",
+      "metrics": {
+        "success": false,
+        "status": "completed",
+        "tests_run": true,
+        "tests_passed": 1,
+        "tests_failed": 0,
+        "total_tool_calls": 2,
+        "files_changed_count": 0,
+        "unnecessary_files_changed": 0,
+        "latency_ms": 0.11078900024585892,
+        "input_tokens": 152,
+        "output_tokens": 44,
+        "used_fallback": false,
+        "error": null
+      },
+      "expected_success": false,
+      "matched_expectation": true
+    }
+  ]
+}
