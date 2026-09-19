@@ -1,0 +1,18 @@
+# Ikke-følsom konfiguration. Følsomme værdier (API-nøgler, database-password)
+# hører til i en Secret — se secret.example.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentops-config
+  namespace: agentops
+data:
+  MLFLOW_TRACKING_URI: "http://mlflow:5000"
+  MLFLOW_EXPERIMENT_NAME: "agentops-developer-platform"
+  MLFLOW_DISABLE_TELEMETRY: "true"
+  LLM_DEFAULT_PROVIDER: "test"
+  ANTHROPIC_DEFAULT_MODEL: "claude-opus-5"
+  ANTHROPIC_FAST_MODEL: "claude-haiku-4-5-20251001"
+  AGENT_AUTO_APPROVE_HIGH_RISK: "false"
+  LOG_LEVEL: "INFO"
+  POSTGRES_DB: "agentops"
+  POSTGRES_USER: "agentops"

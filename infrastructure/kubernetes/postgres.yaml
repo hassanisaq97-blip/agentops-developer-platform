@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: agentops
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: agentops
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # kun ét replika giver mening for en enkelt PVC uden en cluster-aware DB
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef: { name: agentops-config, key: POSTGRES_USER }
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef: { name: agentops-config, key: POSTGRES_DB }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: agentops-secrets, key: POSTGRES_PASSWORD }
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "agentops"] }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "agentops"] }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: agentops
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

@@ -1,0 +1,18 @@
+# Kopiér til terraform.tfvars (som er git-ignoreret) og udfyld.
+# ALDRIG commit den udfyldte fil.
+
+project_name = "agentops"
+environment  = "dev"
+location     = "westeurope"
+
+postgres_admin_username = "agentopsadmin"
+postgres_admin_password = "CHANGE_ME_TO_A_STRONG_PASSWORD"
+
+# Tomt er gyldigt — platformen falder da tilbage til den deterministiske test-provider.
+anthropic_api_key = ""
+openai_api_key    = ""
+
+# Udfyldes efter det første `docker push` til det Container Registry, denne
+# konfiguration opretter.
+api_image    = ""
+mlflow_image = ""

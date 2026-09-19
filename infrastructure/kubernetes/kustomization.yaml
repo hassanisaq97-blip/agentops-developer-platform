@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: agentops
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - postgres.yaml
+  - mlflow.yaml
+  - api.yaml
+# secret.example.yaml er bevidst IKKE inkluderet her — kopiér den, udfyld
+# rigtige værdier, og apply'ér kopien separat (se README i denne mappe).
