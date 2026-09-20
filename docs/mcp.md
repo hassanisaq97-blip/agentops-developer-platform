@@ -75,17 +75,16 @@ over vores egen `agentops.agent.risk`-politik.
 
 ## Sådan forbinder Claude Code til serveren
 
-Tilføj følgende til Claude Code's MCP-konfiguration (fx `.mcp.json` i et
-projekt, eller via `claude mcp add`):
+Dette repository har et checket-ind `.mcp.json` i roden:
 
 ```json
 {
   "mcpServers": {
     "agentops-developer-tools": {
-      "command": "python",
+      "command": "${CLAUDE_PROJECT_DIR}/.venv/bin/python",
       "args": ["-m", "agentops.mcp_server"],
       "env": {
-        "AGENT_WORKSPACE_ROOT": "/absolut/sti/til/target-repository",
+        "AGENT_WORKSPACE_ROOT": "${CLAUDE_PROJECT_DIR}/.mcp_demo_workspace",
         "MCP_DISABLE_FILE_EDITS": "false"
       }
     }
@@ -93,9 +92,52 @@ projekt, eller via `claude mcp add`):
 }
 ```
 
-`AGENT_WORKSPACE_ROOT` SKAL være en absolut sti til det repository, du vil
-give Claude Code adgang til via disse tools — sæt den aldrig til et
-repository, du ikke har tillid til at give læse/skrive-adgang.
+Det betyder, at hvis du åbner DETTE repository i Claude Code (efter `uv venv
+&& uv pip install -e . --group dev`, jf. README), er MCP-serveren allerede
+konfigureret — Claude Code spawner den automatisk med den rigtige interpreter
+(`.venv/bin/python`, ikke en tilfældig `python` fra PATH) og peger den på
+`.mcp_demo_workspace/`, en git-initialiseret arbejdskopi af `demo_repo/` (se
+`scripts/prepare_mcp_demo_workspace.py` for hvorfor `demo_repo/` selv IKKE
+har sit eget `.git` — et indlejret repo i et repo giver "gitlink"-forvirring).
+
+For at bruge MCP-serveren mod et ANDET repository (ikke demoen), tilføj din
+egen server via `claude mcp add`, eller redigér `.mcp.json` lokalt (ucommitted)
+med en anden `AGENT_WORKSPACE_ROOT` — sæt den aldrig til et repository, du
+ikke har tillid til at give læse/skrive-adgang.
+
+### Reproducerbar demo: Claude Code retter en bug via MCP
+
+```bash
+uv venv && uv pip install -e . --group dev   # hvis ikke allerede gjort
+python scripts/prepare_mcp_demo_workspace.py  # klargør/nulstil .mcp_demo_workspace/
+claude                                        # åbn Claude Code i repo-roden
+```
+
+Bed derefter Claude Code (i selve CLI'en, ikke i denne kodebase) om noget i
+stil med: *"Brug agentops-developer-tools MCP-serveren til at finde og rette
+den fejlende test i .mcp_demo_workspace."* Det forventede forløb:
+
+1. Claude Code kalder `search_code`/`read_file` (LAV risiko) for at finde
+   `add()`-funktionen i `src/calculator.py`.
+2. Claude Code kalder `run_tests` (MIDDEL risiko) og ser den fejlende test.
+3. Claude Code foreslår en rettelse via `apply_patch` — et `DESTRUCTIVE`
+   MCP-tool. **Claude Code's egen indbyggede tilladelsesprompt** ("Allow
+   apply_patch?") stopper her og venter på dit eksplicitte OK, før kaldet
+   udføres.
+4. Efter din godkendelse anvendes patchen, og Claude Code kalder `run_tests`
+   igen for at bekræfte, at testsuiten består.
+
+**Vigtig præcisering:** dette er IKKE det samme godkendelses-lag som
+`agentops.agent.risk`/`PendingApproval` (ADR 0005, ADR 0011), som kun er
+aktivt, når AgentOps' EGEN orchestrator kører løkken (via `POST /tasks` eller
+`scripts/run_demo.py`). Når Claude Code selv er MCP-klienten, er det Claude
+Code's generiske, indbyggede tool-tilladelses-UI, der udgør
+menneske-i-loopet — ikke platformens interne risk-klassificering. Begge lag
+er reelle sikkerhedsgrænser, men det er to forskellige mekanismer, og denne
+demo tester den førstnævnte. Uanset hvilken klient der kalder MCP-serveren,
+håndhæves path traversal-beskyttelsen og command-allowlistningen altid af
+`WorkspaceSandbox`/`agentops.security.commands` — det er IKKE
+klient-afhængigt.
 
 ## Sådan testes serveren isoleret
 

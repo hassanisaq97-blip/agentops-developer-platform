@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agentops-developer-tools": {
+      "command": "${CLAUDE_PROJECT_DIR}/.venv/bin/python",
+      "args": ["-m", "agentops.mcp_server"],
+      "env": {
+        "AGENT_WORKSPACE_ROOT": "${CLAUDE_PROJECT_DIR}/.mcp_demo_workspace",
+        "MCP_DISABLE_FILE_EDITS": "false"
+      }
+    }
+  }
+}

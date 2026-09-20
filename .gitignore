@@ -38,3 +38,7 @@ mlartifacts/
 node_modules/
 dist/
 build/
+
+# Git-initialiseret arbejdskopi af demo_repo/, brugt af Claude Code via .mcp.json
+# (se scripts/prepare_mcp_demo_workspace.py) — genskabes frit, aldrig checket ind.
+.mcp_demo_workspace/
