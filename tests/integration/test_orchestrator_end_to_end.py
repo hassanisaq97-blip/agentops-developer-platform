@@ -66,8 +66,9 @@ async def test_agent_pauses_for_approval_before_applying_patch(buggy_repo):
 
     assert result.status == TaskStatus.AWAITING_APPROVAL
     assert result.pending_approval is not None
-    assert result.pending_approval.tool_name == "apply_patch"
-    assert result.pending_approval.risk_level == "high"
+    assert len(result.pending_approval.tool_calls) == 1
+    assert result.pending_approval.tool_calls[0].tool_name == "apply_patch"
+    assert result.pending_approval.tool_calls[0].risk_level == "high"
     assert "get_repository_status" in result.tools_used
     assert "run_tests" in result.tools_used
     assert "search_code" in result.tools_used

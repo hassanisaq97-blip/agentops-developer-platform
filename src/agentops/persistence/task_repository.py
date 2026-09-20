@@ -13,8 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agentops.agent.events import AgentEvent
-from agentops.agent.risk import RiskLevel
-from agentops.agent.schemas import AgentRunResult, PendingApproval, TaskStatus
+from agentops.agent.schemas import AgentRunResult, PendingApproval, PendingToolCall, TaskStatus
 from agentops.gateway.schemas import Message
 from agentops.persistence.models import ApprovalDecision, ApprovalRecord, TaskRecord
 
@@ -71,9 +70,9 @@ def apply_agent_result(session: Session, record: TaskRecord, result: AgentRunRes
         session.add(
             ApprovalRecord(
                 task_id=record.id,
-                tool_name=result.pending_approval.tool_name,
-                arguments_json=result.pending_approval.arguments,
-                risk_level=result.pending_approval.risk_level.value,
+                tool_calls_json=[
+                    tc.model_dump(mode="json") for tc in result.pending_approval.tool_calls
+                ],
             )
         )
     session.flush()
@@ -102,9 +101,7 @@ def record_approval_decision(
 
 def to_pending_approval_schema(approval: ApprovalRecord) -> PendingApproval:
     return PendingApproval(
-        tool_name=approval.tool_name,
-        arguments=approval.arguments_json,
-        risk_level=RiskLevel(approval.risk_level),
+        tool_calls=[PendingToolCall.model_validate(tc) for tc in approval.tool_calls_json]
     )
 
 

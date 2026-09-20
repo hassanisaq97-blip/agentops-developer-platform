@@ -76,13 +76,15 @@ class TaskRecord(Base):
 
 
 class ApprovalRecord(Base):
+    """Én godkendelses-BATCH: alle tool calls fra samme model-tur, som skal
+    godkendes/afvises samlet — se agentops.agent.schemas.PendingApproval."""
+
     __tablename__ = "approvals"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     task_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tasks.id"))
-    tool_name: Mapped[str] = mapped_column(String(64))
-    arguments_json: Mapped[dict] = mapped_column(JSON, default=dict)
-    risk_level: Mapped[str] = mapped_column(String(16))
+    tool_calls_json: Mapped[list] = mapped_column(JSON, default=list)
+    """Liste af {id, tool_name, arguments, risk_level} — se PendingToolCall."""
     # native_enum=False: gemmes som VARCHAR i stedet for en Postgres CREATE TYPE-enum.
     # En native Postgres-enum kræver eksplicit DROP TYPE-håndtering i Alembic-downgrades
     # (et kendt fald­grube-mønster) — VARCHAR er enklere og identisk på tværs af SQLite/Postgres.

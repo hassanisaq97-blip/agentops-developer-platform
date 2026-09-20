@@ -16,10 +16,33 @@ class TaskStatus(StrEnum):
     MAX_STEPS_REACHED = "max_steps_reached"
 
 
-class PendingApproval(BaseModel):
+class PendingToolCall(BaseModel):
+    """Ét tool call afventende godkendelse — der kan være flere pr. model-tur,
+    da Claude/OpenAI kan returnere parallelle tool_use-blocks i samme svar."""
+
+    id: str
     tool_name: str
     arguments: dict
     risk_level: RiskLevel
+
+
+class PendingApproval(BaseModel):
+    """En hel batch af tool calls fra ét model-svar, afventende én samlet
+    menneskelig beslutning.
+
+    Alle tool calls fra samme model-tur godkendes/afvises sammen, ikke
+    enkeltvis: Anthropic/OpenAI's tool-use-protokol kræver, at ALLE
+    tool_use-blocks i en assistant-besked får et tool_result, før samtalen
+    kan fortsætte — vi kan derfor ikke eksekvere nogle og lade andre afvente,
+    uden at samtalen ender i en ugyldig tilstand. Se docs/adr/0011.
+    """
+
+    tool_calls: list[PendingToolCall]
+
+    @property
+    def requires_review(self) -> list[PendingToolCall]:
+        """De(t) tool call(s), der reelt udløste godkendelseskravet (HIGH risk)."""
+        return [tc for tc in self.tool_calls if tc.risk_level == RiskLevel.HIGH]
 
 
 class AgentRunResult(BaseModel):

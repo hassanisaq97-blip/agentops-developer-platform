@@ -2,7 +2,7 @@ import pytest
 
 from agentops.agent.events import AgentEvent, AgentEventType
 from agentops.agent.risk import RiskLevel
-from agentops.agent.schemas import AgentRunResult, PendingApproval, TaskStatus
+from agentops.agent.schemas import AgentRunResult, PendingApproval, PendingToolCall, TaskStatus
 from agentops.gateway.schemas import ChatRole, Message, TokenUsage
 from agentops.persistence import db, task_repository
 from agentops.settings import Settings
@@ -77,16 +77,23 @@ def test_awaiting_approval_creates_pending_approval_record(session):
     result = _completed_result()
     result.status = TaskStatus.AWAITING_APPROVAL
     result.pending_approval = PendingApproval(
-        tool_name="apply_patch", arguments={"diff_text": "..."}, risk_level=RiskLevel.HIGH
+        tool_calls=[
+            PendingToolCall(
+                id="call_1",
+                tool_name="apply_patch",
+                arguments={"diff_text": "..."},
+                risk_level=RiskLevel.HIGH,
+            )
+        ]
     )
     task_repository.apply_agent_result(session, record, result)
 
     pending = task_repository.get_pending_approval(session, record.id)
     assert pending is not None
-    assert pending.tool_name == "apply_patch"
+    assert pending.tool_calls_json[0]["tool_name"] == "apply_patch"
 
     schema = task_repository.to_pending_approval_schema(pending)
-    assert schema.risk_level == RiskLevel.HIGH
+    assert schema.tool_calls[0].risk_level == RiskLevel.HIGH
 
 
 def test_record_approval_decision_marks_approved(session):
@@ -100,7 +107,11 @@ def test_record_approval_decision_marks_approved(session):
     result = _completed_result()
     result.status = TaskStatus.AWAITING_APPROVAL
     result.pending_approval = PendingApproval(
-        tool_name="apply_patch", arguments={}, risk_level=RiskLevel.HIGH
+        tool_calls=[
+            PendingToolCall(
+                id="call_1", tool_name="apply_patch", arguments={}, risk_level=RiskLevel.HIGH
+            )
+        ]
     )
     task_repository.apply_agent_result(session, record, result)
 

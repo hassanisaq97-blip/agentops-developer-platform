@@ -25,7 +25,7 @@ from agentops.agent.events import AgentEvent, AgentEventType
 from agentops.agent.mcp_client import MCPClient, MCPToolError
 from agentops.agent.risk import requires_approval as risk_requires_approval
 from agentops.agent.risk import risk_level_for
-from agentops.agent.schemas import AgentRunResult, PendingApproval, TaskStatus
+from agentops.agent.schemas import AgentRunResult, PendingApproval, PendingToolCall, TaskStatus
 from agentops.gateway.gateway import LLMGateway
 from agentops.gateway.schemas import (
     ChatRole,
@@ -127,7 +127,11 @@ class AgentOrchestrator:
     ) -> AgentRunResult:
         with mlflow.start_span(name="agent_resume", span_type=SpanType.AGENT) as span:
             span.set_inputs(
-                {"task": task, "tool_name": pending_approval.tool_name, "approved": approved}
+                {
+                    "task": task,
+                    "tool_names": [tc.tool_name for tc in pending_approval.tool_calls],
+                    "approved": approved,
+                }
             )
             result = await self._resume(
                 task,
@@ -160,43 +164,47 @@ class AgentOrchestrator:
             events = list(prior_events or [])
             conversation = list(conversation_state)
 
-            tool_call_id = conversation[-1].tool_calls[0].id
-
+            # Alle tool calls fra samme model-tur godkendes/afvises som én batch (se
+            # PendingApproval's docstring) — Anthropic/OpenAI kræver et tool_result for
+            # HVERT tool_use i den forudgående assistant-besked, før samtalen kan
+            # fortsætte, så vi kan ikke eksekvere nogle og lade andre afvente.
             if approved:
-                events.append(
-                    AgentEvent(
-                        step=len(events),
-                        type=AgentEventType.APPROVAL_GRANTED,
-                        tool_name=pending_approval.tool_name,
-                        tool_call_id=tool_call_id,
+                for pending_call in pending_approval.tool_calls:
+                    events.append(
+                        AgentEvent(
+                            step=len(events),
+                            type=AgentEventType.APPROVAL_GRANTED,
+                            tool_name=pending_call.tool_name,
+                            tool_call_id=pending_call.id,
+                        )
                     )
-                )
-                observation = await self._execute_tool(
-                    mcp_client,
-                    pending_approval.tool_name,
-                    pending_approval.arguments,
-                    tool_call_id,
-                    len(events),
-                    events,
-                )
-                conversation.append(observation)
+                    observation = await self._execute_tool(
+                        mcp_client,
+                        pending_call.tool_name,
+                        pending_call.arguments,
+                        pending_call.id,
+                        len(events),
+                        events,
+                    )
+                    conversation.append(observation)
             else:
-                events.append(
-                    AgentEvent(
-                        step=len(events),
-                        type=AgentEventType.APPROVAL_DENIED,
-                        tool_name=pending_approval.tool_name,
-                        tool_call_id=tool_call_id,
+                for pending_call in pending_approval.tool_calls:
+                    events.append(
+                        AgentEvent(
+                            step=len(events),
+                            type=AgentEventType.APPROVAL_DENIED,
+                            tool_name=pending_call.tool_name,
+                            tool_call_id=pending_call.id,
+                        )
                     )
-                )
-                conversation.append(
-                    Message(
-                        role=ChatRole.TOOL,
-                        name=pending_approval.tool_name,
-                        tool_call_id=tool_call_id,
-                        content='{"denied_by_human": true}',
+                    conversation.append(
+                        Message(
+                            role=ChatRole.TOOL,
+                            name=pending_call.tool_name,
+                            tool_call_id=pending_call.id,
+                            content='{"denied_by_human": true}',
+                        )
                     )
-                )
 
             return await self._run_loop(
                 task=task,
@@ -307,33 +315,57 @@ class AgentOrchestrator:
                     None,
                 )
 
-            tool_call = result.message.tool_calls[0]
-            risk = risk_level_for(tool_call.name)
-            events.append(
-                AgentEvent(
-                    step=step,
-                    type=AgentEventType.TOOL_CALL,
-                    tool_name=tool_call.name,
-                    tool_call_id=tool_call.id,
-                    arguments=redact_mapping(tool_call.arguments),
-                    risk_level=risk,
-                    rationale=result.message.content,
-                )
-            )
-            step += 1
-
-            if risk_requires_approval(
-                tool_call.name, auto_approve_high_risk=self._settings.agent_auto_approve_high_risk
-            ):
+            # Claude/OpenAI kan returnere flere parallelle tool_use-blocks i ét svar.
+            # Vi behandler dem alle her — se docs/adr/0011 for hvorfor godkendelse
+            # sker som én batch-beslutning for hele turen frem for pr. tool call.
+            tool_calls = result.message.tool_calls
+            pending_calls: list[PendingToolCall] = []
+            for i, tool_call in enumerate(tool_calls):
+                risk = risk_level_for(tool_call.name)
                 events.append(
                     AgentEvent(
                         step=step,
-                        type=AgentEventType.APPROVAL_REQUIRED,
+                        type=AgentEventType.TOOL_CALL,
                         tool_name=tool_call.name,
                         tool_call_id=tool_call.id,
+                        arguments=redact_mapping(tool_call.arguments),
+                        risk_level=risk,
+                        rationale=result.message.content if i == 0 else None,
+                    )
+                )
+                step += 1
+                pending_calls.append(
+                    PendingToolCall(
+                        id=tool_call.id,
+                        tool_name=tool_call.name,
+                        arguments=tool_call.arguments,
                         risk_level=risk,
                     )
                 )
+
+            batch_needs_approval = any(
+                risk_requires_approval(
+                    pc.tool_name, auto_approve_high_risk=self._settings.agent_auto_approve_high_risk
+                )
+                for pc in pending_calls
+            )
+
+            if batch_needs_approval:
+                for pc in pending_calls:
+                    if risk_requires_approval(
+                        pc.tool_name,
+                        auto_approve_high_risk=self._settings.agent_auto_approve_high_risk,
+                    ):
+                        events.append(
+                            AgentEvent(
+                                step=step,
+                                type=AgentEventType.APPROVAL_REQUIRED,
+                                tool_name=pc.tool_name,
+                                tool_call_id=pc.id,
+                                risk_level=pc.risk_level,
+                            )
+                        )
+                        step += 1
                 return self._finalize(
                     TaskStatus.AWAITING_APPROVAL,
                     task,
@@ -345,16 +377,15 @@ class AgentOrchestrator:
                     provider,
                     model,
                     used_fallback,
-                    PendingApproval(
-                        tool_name=tool_call.name, arguments=tool_call.arguments, risk_level=risk
-                    ),
+                    PendingApproval(tool_calls=pending_calls),
                 )
 
-            observation = await self._execute_tool(
-                mcp_client, tool_call.name, tool_call.arguments, tool_call.id, step, events
-            )
-            conversation.append(observation)
-            step += 1
+            for tool_call in tool_calls:
+                observation = await self._execute_tool(
+                    mcp_client, tool_call.name, tool_call.arguments, tool_call.id, step, events
+                )
+                conversation.append(observation)
+                step += 1
 
         events.append(AgentEvent(step=step, type=AgentEventType.MAX_STEPS_REACHED))
         return self._finalize(

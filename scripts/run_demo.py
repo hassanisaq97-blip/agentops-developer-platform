@@ -94,8 +94,9 @@ def main() -> None:
             if task["status"] == "awaiting_approval":
                 _banner("7. Menneskelig godkendelse kræves")
                 pending = task["pending_approval"]
-                print(f"Tool: {pending['tool_name']} (risiko: {pending['risk_level']})")
-                print(f"Argumenter: {pending['arguments']}")
+                for tool_call in pending["tool_calls"]:
+                    print(f"Tool: {tool_call['tool_name']} (risiko: {tool_call['risk_level']})")
+                    print(f"Argumenter: {tool_call['arguments']}")
                 print("\n-> Godkender ændringen (POST /tasks/{id}/approve, approved=true) ...")
 
                 task = client.post(f"/tasks/{task_id}/approve", json={"approved": True}).json()

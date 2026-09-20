@@ -4,7 +4,7 @@ from agentops.agent.context import ContextStrategy
 from agentops.agent.events import AgentEvent, AgentEventType
 from agentops.agent.orchestrator import AgentOrchestrator
 from agentops.agent.risk import RiskLevel, risk_level_for
-from agentops.agent.schemas import AgentRunResult, PendingApproval, TaskStatus
+from agentops.agent.schemas import AgentRunResult, PendingApproval, PendingToolCall, TaskStatus
 
 __all__ = [
     "AgentEvent",
@@ -13,6 +13,7 @@ __all__ = [
     "AgentRunResult",
     "ContextStrategy",
     "PendingApproval",
+    "PendingToolCall",
     "RiskLevel",
     "TaskStatus",
     "risk_level_for",

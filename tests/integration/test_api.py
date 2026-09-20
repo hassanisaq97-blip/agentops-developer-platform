@@ -83,7 +83,7 @@ def test_create_task_pauses_for_approval_then_resumes(client):
     assert create.status_code == 201
     body = create.json()
     assert body["status"] == "awaiting_approval"
-    assert body["pending_approval"]["tool_name"] == "apply_patch"
+    assert body["pending_approval"]["tool_calls"][0]["tool_name"] == "apply_patch"
     task_id = body["id"]
 
     trace = client.get(f"/tasks/{task_id}/trace")

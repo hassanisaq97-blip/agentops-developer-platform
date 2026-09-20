@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from agentops.agent.risk import RiskLevel
 from agentops.api.schemas import (
     EvalCaseResultResponse,
     EvalRunResponse,
     PendingApprovalResponse,
+    PendingToolCallResponse,
     TaskEventResponse,
     TaskResponse,
     TaskTraceResponse,
@@ -21,9 +21,7 @@ def _pending_approval_response(record: TaskRecord) -> PendingApprovalResponse | 
     if pending is None:
         return None
     return PendingApprovalResponse(
-        tool_name=pending.tool_name,
-        arguments=pending.arguments_json,
-        risk_level=RiskLevel(pending.risk_level),
+        tool_calls=[PendingToolCallResponse.model_validate(tc) for tc in pending.tool_calls_json]
     )
 
 

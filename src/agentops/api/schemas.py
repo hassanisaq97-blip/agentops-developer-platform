@@ -29,10 +29,18 @@ class CreateTaskRequest(BaseModel):
     complexity: TaskComplexity = TaskComplexity.SIMPLE
 
 
-class PendingApprovalResponse(BaseModel):
+class PendingToolCallResponse(BaseModel):
+    id: str
     tool_name: str
     arguments: dict
     risk_level: RiskLevel
+
+
+class PendingApprovalResponse(BaseModel):
+    """Alle tool calls fra samme model-tur, afventende én samlet godkendelse — se
+    agentops.agent.schemas.PendingApproval."""
+
+    tool_calls: list[PendingToolCallResponse]
 
 
 class TaskResponse(BaseModel):
