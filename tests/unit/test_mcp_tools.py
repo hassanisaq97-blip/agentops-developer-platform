@@ -139,3 +139,13 @@ def test_apply_patch_reports_error_on_mismatch(repo):
     result = tools.apply_patch(repo, diff)
     assert result["applied"] is False
     assert "error" in result
+
+
+def test_apply_patch_rejects_traversal(repo):
+    """En ondsindet (eller manipuleret) patch-target uden for workspacet skal
+    afvises af sandboxen, uanset hvad diff-headeren siger — se ADR-0011 og
+    docs/security.md. Uden dette er path traversal via apply_patch en åben
+    vej for prompt injection i fil-indhold til at nå filer uden for repoet."""
+    diff = "--- a/../outside.py\n+++ b/../outside.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
+    with pytest.raises(PathSecurityError):
+        tools.apply_patch(repo, diff)

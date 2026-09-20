@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from agentops.api.main import create_app
+from agentops.evaluation.cases import BENCHMARK_CASES
 from agentops.settings import Settings
 
 
@@ -139,7 +140,7 @@ def test_evaluation_run_and_list(client):
     assert run_response.status_code == 201
     body = run_response.json()
     assert 0.0 <= body["success_rate"] <= 1.0
-    assert len(body["case_results"]) == 4
+    assert len(body["case_results"]) == len(BENCHMARK_CASES)
 
     list_response = client.get("/evaluations")
     assert list_response.status_code == 200
