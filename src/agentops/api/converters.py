@@ -7,13 +7,15 @@ from agentops.api.schemas import (
     EvalRunResponse,
     PendingApprovalResponse,
     PendingToolCallResponse,
+    PhaseResultResponse,
     TaskEventResponse,
     TaskResponse,
     TaskTraceResponse,
+    WorkflowResponse,
 )
 from agentops.evaluation.schemas import EvalRunSummary
 from agentops.persistence import task_repository
-from agentops.persistence.models import ApprovalDecision, TaskRecord
+from agentops.persistence.models import ApprovalDecision, TaskRecord, WorkflowRecord
 
 
 def _pending_approval_response(record: TaskRecord) -> PendingApprovalResponse | None:
@@ -75,6 +77,34 @@ def task_record_to_trace_response(record: TaskRecord) -> TaskTraceResponse:
             )
             for e in events
         ],
+    )
+
+
+def workflow_record_to_response(record: WorkflowRecord) -> WorkflowResponse:
+    pending = (
+        PendingApprovalResponse(
+            tool_calls=[
+                PendingToolCallResponse.model_validate(tc) for tc in record.pending_approval_json
+            ]
+        )
+        if record.pending_approval_json is not None
+        else None
+    )
+    return WorkflowResponse(
+        id=record.id,
+        description=record.description,
+        status=record.status,
+        phases=[PhaseResultResponse.model_validate(p) for p in record.phases_json],
+        final_verdict=record.final_verdict,
+        pending_approval=pending,
+        files_changed=record.files_changed,
+        tests_passed=record.tests_passed,
+        tests_failed=record.tests_failed,
+        agent_handoffs=record.agent_handoffs,
+        total_input_tokens=record.total_input_tokens,
+        total_output_tokens=record.total_output_tokens,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
     )
 
 

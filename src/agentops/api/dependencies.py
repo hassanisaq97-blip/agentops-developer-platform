@@ -12,6 +12,7 @@ from collections.abc import Generator
 from fastapi import Request
 from sqlalchemy.orm import Session
 
+from agentops.agent.multi_agent import MultiAgentOrchestrator
 from agentops.agent.orchestrator import AgentOrchestrator
 from agentops.gateway.gateway import LLMGateway
 from agentops.gateway.schemas import ToolDefinition
@@ -29,6 +30,10 @@ def get_gateway(request: Request) -> LLMGateway:
 
 def get_orchestrator(request: Request) -> AgentOrchestrator:
     return request.app.state.orchestrator
+
+
+def get_multi_agent_orchestrator(request: Request) -> MultiAgentOrchestrator:
+    return request.app.state.multi_agent_orchestrator
 
 
 def get_cached_tools(request: Request) -> list[ToolDefinition]:

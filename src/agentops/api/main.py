@@ -14,8 +14,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from agentops.agent.mcp_client import MCPClient
+from agentops.agent.multi_agent import MultiAgentOrchestrator
 from agentops.agent.orchestrator import AgentOrchestrator
-from agentops.api.routers import evaluations, health, tasks, tools
+from agentops.api.routers import evaluations, health, tasks, tools, workflows
 from agentops.gateway.factory import build_gateway
 from agentops.memory.integration import retrieve_memories, save_memories
 from agentops.observability.logging_config import configure_logging
@@ -44,11 +45,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         gateway = build_gateway(settings)
         app.state.settings = settings
         app.state.gateway = gateway
+        memory_retriever = retrieve_memories if settings.agent_memory_enabled else None
+        memory_saver = save_memories if settings.agent_memory_enabled else None
         app.state.orchestrator = AgentOrchestrator(
-            gateway,
-            settings,
-            memory_retriever=retrieve_memories if settings.agent_memory_enabled else None,
-            memory_saver=save_memories if settings.agent_memory_enabled else None,
+            gateway, settings, memory_retriever=memory_retriever, memory_saver=memory_saver
+        )
+        app.state.multi_agent_orchestrator = MultiAgentOrchestrator(
+            gateway, settings, memory_retriever=memory_retriever, memory_saver=memory_saver
         )
 
         async with MCPClient(str(settings.workspace_root)) as client:
@@ -65,6 +68,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(tasks.router)
+    app.include_router(workflows.router)
     app.include_router(evaluations.router)
     app.include_router(tools.router)
 

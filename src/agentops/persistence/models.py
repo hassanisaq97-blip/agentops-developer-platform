@@ -123,6 +123,43 @@ class AgentMemoryModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class WorkflowRecord(Base):
+    """Én multi-agent workflow-kørsel (Developer/Test/Security/Reviewer) — se
+    `agentops.agent.multi_agent`. Bevidst en SEPARAT tabel fra `tasks`: en
+    workflow-kørsel har en anden facon (flere faser, ét samlet verdict) end en
+    enkelt-agent-opgave, og at overloade `TaskRecord` med begge ville gøre
+    begge sværere at forstå."""
+
+    __tablename__ = "workflows"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    description: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32))
+    context_strategy: Mapped[str] = mapped_column(String(32))
+    complexity: Mapped[str] = mapped_column(String(16))
+    workspace_root: Mapped[str] = mapped_column(String(512))
+
+    phases_json: Mapped[list] = mapped_column(JSON, default=list)
+    """Liste af {role, summary, success, findings, tool_calls} — se PhaseResult."""
+    final_verdict: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    files_changed: Mapped[list] = mapped_column(JSON, default=list)
+    tests_passed: Mapped[int | None] = mapped_column(nullable=True)
+    tests_failed: Mapped[int | None] = mapped_column(nullable=True)
+    agent_handoffs: Mapped[int] = mapped_column(default=0)
+    total_input_tokens: Mapped[int] = mapped_column(default=0)
+    total_output_tokens: Mapped[int] = mapped_column(default=0)
+
+    developer_conversation_state: Mapped[list] = mapped_column(JSON, default=list)
+    developer_events_json: Mapped[list] = mapped_column(JSON, default=list)
+    pending_approval_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    """Liste af PendingToolCall-dicts, kun sat mens status er 'awaiting_approval'."""
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
 class EvaluationRunRecord(Base):
     __tablename__ = "evaluation_runs"
 

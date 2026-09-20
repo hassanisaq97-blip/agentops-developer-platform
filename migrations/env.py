@@ -13,6 +13,7 @@ from agentops.persistence.models import (  # noqa: E402, F401
     ApprovalRecord,
     EvaluationRunRecord,
     TaskRecord,
+    WorkflowRecord,
 )
 from agentops.settings import get_settings  # noqa: E402
 

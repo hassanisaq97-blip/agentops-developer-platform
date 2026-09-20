@@ -95,6 +95,42 @@ class ApprovalRequest(BaseModel):
     approved: bool
 
 
+class CreateWorkflowRequest(BaseModel):
+    description: str = Field(
+        ..., min_length=1, max_length=4000, description="Softwareudviklingsopgaven til workflowet."
+    )
+    repository: str = Field(default="demo")
+    context_strategy: ContextStrategy = ContextStrategy.TARGETED_MCP
+    complexity: TaskComplexity = TaskComplexity.SIMPLE
+
+
+class PhaseResultResponse(BaseModel):
+    role: str
+    summary: str
+    success: bool
+    findings: list[str]
+    tool_calls: int
+
+
+class WorkflowResponse(BaseModel):
+    id: uuid.UUID
+    description: str
+    status: str
+    phases: list[PhaseResultResponse]
+    final_verdict: str | None
+    pending_approval: PendingApprovalResponse | None
+    files_changed: list[str]
+    tests_passed: int | None
+    tests_failed: int | None
+    agent_handoffs: int
+    total_input_tokens: int
+    total_output_tokens: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class ToolInfo(BaseModel):
     name: str
     description: str

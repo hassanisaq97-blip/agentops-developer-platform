@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     så mange trin pr. kald og skal genoptages via POST /tasks/{id}/continue — til
     bevidst langvarige opgaver, der deles op i afgrænsede kørsler. Se ADR-0014."""
 
+    # Multi-agent workflow
+    multi_agent_developer_max_steps: int = 25
+    """Samme default som agent_max_tool_calls — Developer-fasen løser selve opgaven og
+    får derfor samme budget som en almindelig enkelt-agent-kørsel ville have."""
+    multi_agent_test_max_steps: int = 6
+    """Test-fasen skal kun orientere sig og køre testsuiten — et langt mindre budget
+    er nok, og forhindrer at fasen løber løbet (se ADR-0015)."""
+
     # MCP server
     mcp_server_host: str = "127.0.0.1"
     mcp_server_port: int = 8765
