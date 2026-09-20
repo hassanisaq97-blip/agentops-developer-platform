@@ -189,6 +189,16 @@ ADR-0005/0011) — støder en genoptaget kørsel på et HIGH-risk tool call,
 pauser den for godkendelse PRÆCIS som en frisk kørsel ville. Testet i
 `tests/security/test_approval_bypass_attempts.py`.
 
+**Fundet og rettet under den afsluttende gennemgang:** multi-agent
+Test-fasen kørte oprindeligt med samme tool-adgang som Developer-fasen, så
+et (usandsynligt, men muligt) `apply_patch`-kald der ville udløse
+`AWAITING_APPROVAL` uden at `_after_developer_phase` tjekkede for det —
+godkendelsen ville forsvinde sporløst i stedet for at nå et menneske. Rettet
+ved at give Test-fasen `allow_file_edits=False` (samme mindste-privilegie-
+princip som Security-fasen), så handlingerne slet ikke tilbydes modellen.
+Se `docs/experiments/lessons-learned.md` punkt 10 og
+`test_multi_agent_test_phase_runs_read_only_and_cannot_leak_an_unhandled_approval_pause`.
+
 ## Kendte, accepterede begrænsninger
 
 - Ingen automatiseret dependency-/container-scanning i CI.

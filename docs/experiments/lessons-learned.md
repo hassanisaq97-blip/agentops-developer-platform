@@ -243,6 +243,39 @@ selve begrundelsen for at bygge rigtige eksperiment-scripts, der udskriver
 og gemmer faktiske tal, i stedet for kun at stole på, at koden "burde"
 virke.
 
+### 10. En afventende godkendelse i multi-agent Test-fasen kunne forsvinde sporløst
+
+En dedikeret slutgennemgang af hele multi-agent-workflowet (`agentops.agent.multi_agent`)
+fandt, at Test-fasen kørte med `AgentOrchestrator.run()`'s STANDARD
+tool-adgang — dvs. med `edit_file`/`apply_patch` tilgængelige, ligesom
+Developer-fasen. Test-fasens faste opgavetekst ("Kør testsuiten og
+rapportér resultatet.") matcher desuden `test_generation`-skillens
+nøgleord, hvis `recommended_tools` inkluderer `apply_patch`. Skulle modellen
+nogensinde kalde et af disse tools i Test-fasen, ville orchestratoren
+korrekt pause med `AWAITING_APPROVAL` — men `_after_developer_phase` tjekkede
+kun `dev_result.status`, aldrig `test_result.status`. Resultatet: workflowet
+ville falde igennem til `COMPLETED` med en (forkert) `changes_requested`-
+konklusion, og den afventende godkendelse ville aldrig blive eksponeret til
+et menneske og ikke kunne genoptages — samme klasse af bug som punkt 8, men
+denne gang et TABT godkendelseskrav i stedet for et tabt observability-felt.
+
+**Rettelse:** Test-fasen (og Security-fasen, som allerede gjorde dette) kører
+nu med `allow_file_edits=False` — `edit_file`/`apply_patch` findes derfor
+slet ikke i den tool-liste, MCP-serveren rapporterer til Test-fasens model,
+så tilstanden strukturelt ikke kan opstå. En regressionstest
+(`tests/security/test_approval_bypass_attempts.py::test_multi_agent_test_phase_runs_read_only_and_cannot_leak_an_unhandled_approval_pause`)
+verificerer, at Developer-, Test- og Security-fasernes `MCPClient` faktisk
+konstrueres med de forventede tilladelser (`[True, False, False]`).
+
+**Lære:** denne bug blev IKKE fundet af de 184 tests, der allerede kørte
+grønt, eller af de tre eksperiment-scripts — den blev fundet ved eksplicit
+at bede en uafhængig gennemgang om at spore, hvad der sker, hvis en fase
+uden for Developer rent faktisk rammer et high-risk tool call, en sti ingen
+eksisterende test øvede. Mindste-privilegie (kun give en fase adgang til de
+tools, den faktisk har brug for) lukkede hullet ved roden, i stedet for at
+tilføje endnu en statustjek, der selv kunne blive overset i en femte fase
+senere.
+
 ### 9. Tre faktiske sammenligninger — hvad der reelt blev målt
 
 Kørt med den deterministiske test-provider (`--provider test`), reproducerbart:
