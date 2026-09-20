@@ -102,6 +102,16 @@ class AnthropicProvider(LLMProvider):
                     }
                 )
             elif m.role == ChatRole.ASSISTANT and m.tool_calls:
+                if m.raw_provider_blocks is not None:
+                    # Genbruger de rå content-blocks fra Anthropics eget svar (inkl.
+                    # eventuelle thinking-blocks med deres signatur) frem for at
+                    # genopbygge dem — adaptive thinking kræver, at et thinking-block
+                    # echoes uændret tilbage for at modellen kan fortsætte ræsonnementet
+                    # fra samme punkt, i stedet for at starte forfra hver tur.
+                    anthropic_messages.append(
+                        {"role": "assistant", "content": m.raw_provider_blocks}
+                    )
+                    continue
                 content: list[dict] = []
                 if m.content:
                     content.append({"type": "text", "text": m.content})
@@ -129,4 +139,5 @@ class AnthropicProvider(LLMProvider):
             role=ChatRole.ASSISTANT,
             content="\n".join(text_parts) if text_parts else None,
             tool_calls=tool_calls,
+            raw_provider_blocks=[block.model_dump(mode="json") for block in response.content],
         )

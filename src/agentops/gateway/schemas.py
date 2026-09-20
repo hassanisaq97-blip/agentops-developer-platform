@@ -46,6 +46,11 @@ class Message(BaseModel):
     """Sat når role == TOOL: hvilket tool call dette er et resultat af."""
     name: str | None = None
     """Sat når role == TOOL: navnet på det tool, der blev kaldt (til logging/routing)."""
+    raw_provider_blocks: list[dict] | None = None
+    """Provider-specifikke content blocks bevaret verbatim (fx Anthropic thinking-blocks
+    med deres signatur). Bruges KUN når beskeden echoes tilbage til den SAMME provider,
+    der producerede den — nødvendigt for korrekt adaptive-thinking-kontinuitet på
+    Claude Opus 5/Sonnet 5. Andre providers ignorerer feltet."""
 
 
 class TokenUsage(BaseModel):

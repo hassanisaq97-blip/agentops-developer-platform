@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     llm_default_provider: str = "test"
     anthropic_api_key: str = ""
     anthropic_default_model: str = "claude-opus-5"
-    anthropic_fast_model: str = "claude-haiku-4-5-20251001"
+    anthropic_fast_model: str = "claude-haiku-4-5"
     openai_api_key: str = ""
     openai_default_model: str = "gpt-4.1"
     openai_fast_model: str = "gpt-4.1-mini"
