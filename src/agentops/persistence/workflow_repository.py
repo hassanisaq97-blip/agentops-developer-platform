@@ -57,6 +57,7 @@ def apply_workflow_result(
     record.agent_handoffs = result.agent_handoffs
     record.total_input_tokens = result.total_usage.input_tokens
     record.total_output_tokens = result.total_usage.output_tokens
+    record.memory_hits = result.memory_hits
     record.developer_conversation_state = [
         m.model_dump(mode="json") for m in result.developer_conversation_state
     ]

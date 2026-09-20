@@ -142,6 +142,7 @@ async def approve_task(
             prior_events=prior_events,
             on_checkpoint=_make_checkpoint_callback(session, record),
             max_continuous_steps=settings.agent_checkpoint_every_n_steps or None,
+            memory_hits=record.memory_hits,
         )
     except Exception as exc:  # se create_task ovenfor: en fejlet genoptagelse skal give et forklaret task-resultat, ikke en 500'er
         record.status = TaskStatus.FAILED.value
@@ -183,6 +184,7 @@ async def continue_task(
             prior_events=prior_events,
             on_checkpoint=_make_checkpoint_callback(session, record),
             max_continuous_steps=settings.agent_checkpoint_every_n_steps or None,
+            memory_hits=record.memory_hits,
         )
     except Exception as exc:  # se create_task ovenfor: samme princip for genoptagelse
         record.status = TaskStatus.FAILED.value

@@ -107,6 +107,7 @@ async def approve_workflow(
             context_strategy=ContextStrategy(record.context_strategy),
             complexity=TaskComplexity(record.complexity),
             developer_events=events,
+            memory_hits=record.memory_hits,
         )
     except Exception as exc:
         record.status = TaskStatus.FAILED.value

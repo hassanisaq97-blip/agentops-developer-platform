@@ -250,6 +250,78 @@ async def test_max_continuous_steps_pauses_and_invokes_checkpoint(monkeypatch, t
     assert fake_client.calls == [("search_code", {"query": "def add"})]
 
 
+async def test_resume_propagates_skill_and_tool_discovery_fields(monkeypatch, tmp_path):
+    """Regression: resume() tidligere glemte at sætte skill_selected/tools_*_count på
+    resultatet — kun _run() gjorde det. En eval-case, der først pauser for
+    godkendelse og derefter genoptages, ville derfor altid vise skill_selected=None
+    og tools_*_count=0, uanset hvad der reelt blev sendt til modellen."""
+    fake_client = _FakeMCPClient()
+    monkeypatch.setattr("agentops.agent.orchestrator.MCPClient", lambda *a, **k: fake_client)
+
+    orchestrator, _ = _build(
+        [_tool_use_result("apply_patch", {"diff_text": "..."}), _final_answer_result("Løst.")]
+    )
+    paused = await orchestrator.run("Der er en bug, testen fejler.", tmp_path)
+    assert paused.status == TaskStatus.AWAITING_APPROVAL
+    assert paused.skill_selected == "debugging"
+
+    final = await orchestrator.resume(
+        "Der er en bug, testen fejler.",
+        tmp_path,
+        paused.conversation_state,
+        paused.pending_approval,
+        approved=True,
+        prior_events=paused.events,
+    )
+
+    assert final.skill_selected == "debugging"
+    assert final.tools_available_count == len(_ALL_TOOL_NAMES)
+    assert final.tools_discovered_count == len(_ALL_TOOL_NAMES)
+
+
+async def test_resume_without_memory_hits_argument_resets_to_zero_not_carried(
+    monkeypatch, tmp_path
+):
+    """Regression: resume() previously reset memory_hits to its Pydantic default (0)
+    unconditionally, silently discarding the count from the initial run() even when
+    the caller had it available. Callers MUST pass memory_hits explicitly to carry
+    it forward — this test documents that contract by proving the explicit value
+    always wins over whatever the AWAITING_APPROVAL result reported."""
+    fake_client = _FakeMCPClient()
+    monkeypatch.setattr("agentops.agent.orchestrator.MCPClient", lambda *a, **k: fake_client)
+
+    retrieved = [
+        MemoryRecord(
+            workspace_key="ws",
+            category=MemoryCategory.LESSON_LEARNED,
+            summary="Tidligere løsning.",
+            outcome="success",
+        )
+    ]
+
+    async def fake_retriever(workspace_key: str, query: str):
+        return retrieved
+
+    orchestrator, _ = _build(
+        [_tool_use_result("apply_patch", {"diff_text": "..."}), _final_answer_result("Løst.")],
+        memory_retriever=fake_retriever,
+    )
+    paused = await orchestrator.run("Der er en bug, testen fejler.", tmp_path)
+    assert paused.memory_hits == 1
+
+    final = await orchestrator.resume(
+        "Der er en bug, testen fejler.",
+        tmp_path,
+        paused.conversation_state,
+        paused.pending_approval,
+        approved=True,
+        prior_events=paused.events,
+        memory_hits=paused.memory_hits,
+    )
+
+    assert final.memory_hits == 1
+
+
 async def test_continue_task_resumes_paused_work_to_completion(monkeypatch, tmp_path):
     fake_client = _FakeMCPClient()
     monkeypatch.setattr("agentops.agent.orchestrator.MCPClient", lambda *a, **k: fake_client)

@@ -125,6 +125,7 @@ class WorkflowResponse(BaseModel):
     agent_handoffs: int
     total_input_tokens: int
     total_output_tokens: int
+    memory_hits: int
     created_at: datetime
     updated_at: datetime
 

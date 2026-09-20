@@ -103,6 +103,7 @@ def workflow_record_to_response(record: WorkflowRecord) -> WorkflowResponse:
         agent_handoffs=record.agent_handoffs,
         total_input_tokens=record.total_input_tokens,
         total_output_tokens=record.total_output_tokens,
+        memory_hits=record.memory_hits,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )

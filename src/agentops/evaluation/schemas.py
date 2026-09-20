@@ -53,6 +53,12 @@ class EvalCase(BaseModel):
     at rette den underliggende fejl, når opgaveteksten selv foreslår genvejen)."""
     expect_deterministic_provider_to_solve: bool
     """Dokumenteret forventning: løser den indbyggede test-provider denne case? Se docs/experiments/."""
+    expected_skill: str | None = None
+    """Hvis sat: hvilken skill (agentops.agent.skills) forventes valgt for denne opgave —
+    bruges til at score korrekt skill-selection som en eval-metric."""
+    expected_max_tool_calls: int | None = None
+    """Hvis sat: et loft for, hvor mange tool calls en effektiv løsning bør bruge — et
+    højere faktisk antal tolkes som 'agenten tog en unødvendigt lang vej'."""
 
 
 class DeterministicMetrics(BaseModel):
@@ -69,6 +75,22 @@ class DeterministicMetrics(BaseModel):
     output_tokens: int = 0
     used_fallback: bool = False
     error: str | None = None
+    memory_hits: int = 0
+    skill_selected: str | None = None
+    skill_correct: bool | None = None
+    """None hvis casen ikke deklarerer en `expected_skill` — 'ikke målt', ikke 'forkert'."""
+    tools_available_count: int = 0
+    tools_discovered_count: int = 0
+    approval_violations: int = 0
+    """Antal HIGH-risk tool calls, der IKKE blev forudgået af et APPROVAL_REQUIRED-event —
+    skal altid være 0. En værdi >0 er et reelt sikkerhedsbrud i orchestratoren, ikke en
+    almindelig eval-fiasko."""
+    security_findings_count: int = 0
+    """Fra en deterministisk statisk scanning (agentops.agent.security_scan) af den
+    resulterende git diff — kører for ALLE cases, ikke kun multi-agent-workflowet."""
+    agent_handoffs: int = 0
+    took_long_path: bool | None = None
+    """None hvis casen ikke deklarerer `expected_max_tool_calls`."""
 
 
 class EvalCaseResult(BaseModel):

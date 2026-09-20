@@ -1,0 +1,32 @@
+{
+  "case_id": "fix_failing_test_add",
+  "single_agent": {
+    "mode": "single_agent",
+    "status": "completed",
+    "agent_handoffs": 0,
+    "total_tool_calls": 6,
+    "tests_passed": 2,
+    "tests_failed": 0,
+    "latency_ms": 0.49,
+    "input_tokens": 1522,
+    "output_tokens": 159
+  },
+  "multi_agent": {
+    "mode": "multi_agent",
+    "status": "completed",
+    "final_verdict": "approved",
+    "agent_handoffs": 4,
+    "total_tool_calls": 8,
+    "tests_passed": 2,
+    "tests_failed": 0,
+    "latency_ms": 0.75,
+    "input_tokens": 1579,
+    "output_tokens": 192,
+    "phases": [
+      "developer",
+      "test",
+      "security",
+      "reviewer"
+    ]
+  }
+}

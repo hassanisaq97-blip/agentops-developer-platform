@@ -232,7 +232,12 @@ class AgentOrchestrator:
         prior_events: list[AgentEvent] | None = None,
         on_checkpoint: OnCheckpoint | None = None,
         max_continuous_steps: int | None = None,
+        memory_hits: int = 0,
     ) -> AgentRunResult:
+        """`memory_hits` skal være den værdi, den OPRINDELIGE `run()`-kald returnerede
+        (`AgentRunResult.memory_hits`) — memory hentes bevidst kun ved opgavens
+        allerførste trin (se ADR-0013), så `resume()` genhenter den ikke, men skal
+        stadig rapportere den korrekt videre i stedet for at nulstille den til 0."""
         with mlflow.start_span(name="agent_resume", span_type=SpanType.AGENT) as span:
             span.set_inputs(
                 {
@@ -253,6 +258,7 @@ class AgentOrchestrator:
                 on_checkpoint=on_checkpoint,
                 max_continuous_steps=max_continuous_steps,
             )
+            result.memory_hits = memory_hits
             await self._maybe_save_memory(workspace_root, task, result)
             span.set_outputs(self._span_outputs(result))
             return result
@@ -323,7 +329,7 @@ class AgentOrchestrator:
                         )
                     )
 
-            return await self._run_loop(
+            result = await self._run_loop(
                 task=task,
                 system_prompt=system_prompt,
                 conversation=conversation,
@@ -335,6 +341,10 @@ class AgentOrchestrator:
                 on_checkpoint=on_checkpoint,
                 max_continuous_steps=max_continuous_steps,
             )
+            result.skill_selected = skill.name if skill else None
+            result.tools_available_count = len(all_tools)
+            result.tools_discovered_count = len(tools)
+            return result
 
     async def continue_task(
         self,
@@ -347,12 +357,15 @@ class AgentOrchestrator:
         prior_events: list[AgentEvent] | None = None,
         on_checkpoint: OnCheckpoint | None = None,
         max_continuous_steps: int | None = None,
+        memory_hits: int = 0,
     ) -> AgentRunResult:
         """Genoptager en PAUSED opgave (checkpoint-baseret) — IKKE en godkendelses-
         beslutning, se `resume()` for det. Bruges til langvarige opgaver, der
         bevidst er delt op i flere afgrænsede kørsler, og til recovery efter en
         uventet API-nedlukning (se ADR-0014). Memory hentes IKKE igen her — det
-        sker kun ved opgavens allerførste `run()`-kald."""
+        sker kun ved opgavens allerførste `run()`-kald; `memory_hits` skal derfor
+        være værdien fra det oprindelige `run()`-kald, så den rapporteres korrekt
+        videre i stedet for at blive nulstillet til 0."""
         with mlflow.start_span(name="agent_continue", span_type=SpanType.AGENT) as span:
             span.set_inputs({"task": task})
             skill = select_skill(task)
@@ -375,6 +388,10 @@ class AgentOrchestrator:
                     on_checkpoint=on_checkpoint,
                     max_continuous_steps=max_continuous_steps,
                 )
+                result.skill_selected = skill.name if skill else None
+                result.tools_available_count = len(all_tools)
+                result.tools_discovered_count = len(tools)
+                result.memory_hits = memory_hits
             await self._maybe_save_memory(workspace_root, task, result)
             span.set_outputs(self._span_outputs(result))
             return result

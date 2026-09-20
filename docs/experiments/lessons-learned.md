@@ -203,6 +203,109 @@ faktisk reducerer antallet af exploratory tool calls, en RIGTIG model ville
 foretage. Det kræver ægte sprogforståelse og er ikke målt her — se
 begrænsningen nedenfor.
 
+### 8. To reelle propagerings-fejl, fanget af de nye eksperimenter — ikke fixtures denne gang
+
+Da agent-memory, skills og dynamisk tool discovery blev tilføjet til
+orchestratoren (`agentops.agent.orchestrator`), blev de nye observability-felter
+(`skill_selected`, `tools_available_count`, `tools_discovered_count`,
+`memory_hits`) sat korrekt i `_run()` (opgavens FØRSTE trin) — men to
+efterfølgende funktioner, der genoptager en allerede startet opgave, blev
+overset:
+
+- **`_resume()` (efter en godkendelsespause) satte aldrig `skill_selected`
+  eller `tools_*_count` på det returnerede resultat** — de forblev på
+  Pydantic-modellens default (`None`/`0`), uanset hvad der faktisk var sendt
+  til modellen i den genoptagne tur. Fanget af den udvidede eval-suites
+  faktiske output: `fix_failing_test_add` (som altid pauser for godkendelse
+  af `apply_patch`) viste `skill_selected: None` i stedet for det forventede
+  `"debugging"` i den første kørsel efter udvidelsen.
+- **`resume()`/`continue_task()` nulstillede `memory_hits` til 0** af samme
+  grund — memory hentes bevidst KUN ved opgavens første trin (se ADR-0013),
+  men resultatet af en genoptaget tur bygges helt forfra af `_run_loop()`,
+  hvis returnerede `AgentRunResult` starter med alle nye felter på deres
+  default. Fanget af `scripts/run_memory_experiment.py`'s egen anden kørsel:
+  `memory_hits` var 0 i stedet for det forventede >0, selvom
+  `MemoryStore.search()` (verificeret direkte) faktisk fandt de gemte
+  erfaringer.
+
+**Rettelse:** `_resume()`/`continue_task()` genberegner nu skill/tools
+(deterministisk, harmløst at genberegne — samme input giver samme output),
+mens `memory_hits` i stedet er en EKSPLICIT parameter, callere skal give
+videre fra det oprindelige `run()`-resultat (ADR-0014 opdateret). Alle
+kald-steder (API-router, evaluerings-runner, multi-agent-workflow,
+eksperiment-scripts) blev opdateret, og to regressionstests blev tilføjet
+(`tests/unit/test_orchestrator_features.py`).
+
+**Lære:** disse bugs var usynlige, indtil noget FAKTISK målte tilstanden
+efter en genoptagelse — hverken `ruff`, `mypy` eller de eksisterende tests
+(som ikke asserter på disse nye felter efter en pause) fangede dem. Det er
+selve begrundelsen for at bygge rigtige eksperiment-scripts, der udskriver
+og gemmer faktiske tal, i stedet for kun at stole på, at koden "burde"
+virke.
+
+### 9. Tre faktiske sammenligninger — hvad der reelt blev målt
+
+Kørt med den deterministiske test-provider (`--provider test`), reproducerbart:
+
+**Memory (uden vs. med), samme opgave kørt to gange i samme workspace**
+(`scripts/run_memory_experiment.py`, `docs/experiments/memory-results.json`):
+
+| Betingelse | Kørsel 1 (memory_hits) | Kørsel 2 (memory_hits) | tool_calls (begge kørsler) |
+|---|---|---|---|
+| Uden memory | 0 | 0 | 6 |
+| Med memory | 0 | **3** | 6 |
+
+Mekanikken virker korrekt: 3 erfaringer gemmes efter kørsel 1 og hentes
+igen ved kørsel 2 for samme workspace. `tool_calls`/success er UÆNDRET
+mellem betingelserne — forventet og dokumenteret (se punkt 8 ovenfor og
+ADR-0013): den deterministiske provider reagerer ikke på fritekst i
+system-prompten, så en adfærdsmæssig effekt af memory-INDHOLD kan kun
+måles ærligt med en rigtig LLM.
+
+**Tool discovery (alle tools vs. dynamisk)**, fire cases
+(`scripts/run_tool_discovery_experiment.py`,
+`docs/experiments/tool-discovery-results.json`):
+
+| Case | Alle tools | Dynamisk | tool_calls (alle→dynamisk) | tokens in/out (alle→dynamisk) |
+|---|---|---|---|---|
+| fix_failing_test_add | 9/9 | 6/9 | 6→6 | 686/29→686/29 |
+| security_review_probe | 9/9 | 4/9 | 2→**1** | 156/44→**57/32** |
+| database_migration_review_probe | 9/9 | 5/9 | 2→2 | 158/44→158/44 |
+| api_review_probe | 9/9 | 4/9 | 2→**1** | 161/44→**60/32** |
+
+Dette er den ENESTE af de tre sammenligninger, hvor den deterministiske
+provider genuint kan vise en adfærdsforskel, fordi discovery direkte
+ændrer, HVILKE tools der findes i `request.tools` — og providerens
+scriptede logik tjekker eksplicit `tool_name in available`. For
+security/api-review-probes udelader `security_review`/`api_review`-skillets
+`recommended_tools` bevidst `run_tests` (det er ikke en del af en
+sikkerheds- eller API-review), så providerens `_next_step` stopper efter
+`get_repository_status` i stedet for at fortsætte til `run_tests` — færre
+kald, færre tokens, samme (uændrede) status. For
+`database_migration_review_probe` inkluderer skillets `recommended_tools`
+`run_tests`, så adfærden er identisk med "alle tools". Ingen af cases'
+`success`/`status` ændrede sig — kun antallet af tools sendt til modellen
+og (hvor et tool blev udeladt) antallet af faktiske kald.
+
+**Single agent vs. multi-agent**, samme case, begge auto-godkendt
+(`scripts/run_multi_agent_experiment.py`,
+`docs/experiments/multi-agent-results.json`):
+
+| Tilstand | Status | Handoffs | tool_calls | tokens in/out |
+|---|---|---|---|---|
+| Single agent | completed | 0 | 6 | 1522/159 |
+| Multi-agent | completed (verdict: approved) | 4 | 8 | 1579/192 |
+
+Multi-agent-workflowet bruger FLERE tool calls og tokens (8 vs. 6, ~4 % mere
+input/output) for at nå det SAMME resultat — de 2 ekstra kald er Test
+Agent-fasens egen `get_repository_status`+`run_tests`, en uafhængig
+verifikation af Developer-fasens allerede anvendte rettelse. Det er en
+reel, målt pris for uafhængig test-verifikation + en statisk
+sikkerhedsscanning + en struktureret reviewer-konklusion — ikke gratis, men
+heller ikke stort: ~4 % flere tokens for et workflow, der (i modsætning til
+en enkelt agent) selv rapporterer, at testsuiten reelt blev verificeret
+bagefter, og eksplicit at ingen sikkerhedsmønstre blev fundet.
+
 ## Kendte begrænsninger i det, der er målt
 
 - **Ingen reelle LLM-metrics.** Uden en konfigureret `ANTHROPIC_API_KEY`
@@ -226,3 +329,10 @@ begrænsningen nedenfor.
   grund af netværksrestriktioner mod hhv. Docker Hub's blob-CDN og
   `registry.terraform.io` — se ADR 0008 og 0009. `docker compose config` og
   `terraform fmt` blev begge kørt og bestået.
+- **Memory- og multi-agent-kvalitet er kun mekanisk verificeret, ikke
+  adfærdsmæssigt.** Om memory rent faktisk gør en rigtig LLM bedre til at
+  løse en opgave (færre tool calls, højere success rate), og om Security
+  Agent-fasens deterministiske scanning reelt matcher, hvad en rigtig LLM's
+  sikkerhedsreview ville finde, er IKKE målt her — kun at mekanikken (hent,
+  gem, filtrér, eksekvér fire fastlagte faser) fungerer korrekt. Se punkt 8-9
+  ovenfor.

@@ -64,6 +64,9 @@ class MultiAgentWorkflowResult(BaseModel):
     tests_failed: int | None = None
     agent_handoffs: int = 0
     total_usage: TokenUsage = Field(default_factory=TokenUsage)
+    total_latency_ms: float = 0.0
+    memory_hits: int = 0
+    """Fra Developer-fasens INDLEDENDE memory-opslag — se AgentRunResult.memory_hits."""
 
 
 class MultiAgentOrchestrator:
@@ -127,7 +130,10 @@ class MultiAgentOrchestrator:
         context_strategy: ContextStrategy = ContextStrategy.TARGETED_MCP,
         complexity: TaskComplexity = TaskComplexity.SIMPLE,
         developer_events: list[AgentEvent] | None = None,
+        memory_hits: int = 0,
     ) -> MultiAgentWorkflowResult:
+        """`memory_hits` skal være værdien fra `run()`'s oprindelige resultat — se
+        `AgentOrchestrator.resume()`'s tilsvarende parameter."""
         with mlflow.start_span(name="multi_agent_workflow", span_type=SpanType.AGENT) as span:
             span.set_inputs({"task": task, "resumed": True})
             dev_orchestrator = self._phase_orchestrator(
@@ -142,6 +148,7 @@ class MultiAgentOrchestrator:
                     developer_conversation_state,
                     pending_approval,
                     approved=approved,
+                    memory_hits=memory_hits,
                     context_strategy=context_strategy,
                     complexity=complexity,
                     prior_events=developer_events,
@@ -179,6 +186,8 @@ class MultiAgentOrchestrator:
                 developer_events=dev_result.events,
                 agent_handoffs=0,
                 total_usage=dev_result.total_usage,
+                total_latency_ms=dev_result.total_latency_ms,
+                memory_hits=dev_result.memory_hits,
             )
 
         developer_phase = PhaseResult(
@@ -196,6 +205,8 @@ class MultiAgentOrchestrator:
                 agent_handoffs=1,
                 files_changed=dev_result.files_changed,
                 total_usage=dev_result.total_usage,
+                total_latency_ms=dev_result.total_latency_ms,
+                memory_hits=dev_result.memory_hits,
             )
 
         phases = [developer_phase]
@@ -259,6 +270,7 @@ class MultiAgentOrchestrator:
             output_tokens=dev_result.total_usage.output_tokens
             + test_result.total_usage.output_tokens,
         )
+        total_latency_ms = dev_result.total_latency_ms + test_result.total_latency_ms
 
         return MultiAgentWorkflowResult(
             status=TaskStatus.COMPLETED,
@@ -270,6 +282,8 @@ class MultiAgentOrchestrator:
             tests_failed=test_result.tests_failed,
             agent_handoffs=handoffs,
             total_usage=total_usage,
+            total_latency_ms=total_latency_ms,
+            memory_hits=dev_result.memory_hits,
         )
 
     async def _run_security_phase(self, workspace_root: Path) -> list[str]:

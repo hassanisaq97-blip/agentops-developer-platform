@@ -148,6 +148,7 @@ class WorkflowRecord(Base):
     agent_handoffs: Mapped[int] = mapped_column(default=0)
     total_input_tokens: Mapped[int] = mapped_column(default=0)
     total_output_tokens: Mapped[int] = mapped_column(default=0)
+    memory_hits: Mapped[int] = mapped_column(default=0)
 
     developer_conversation_state: Mapped[list] = mapped_column(JSON, default=list)
     developer_events_json: Mapped[list] = mapped_column(JSON, default=list)

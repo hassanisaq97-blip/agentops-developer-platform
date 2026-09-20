@@ -14,9 +14,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from agentops.agent.events import AgentEventType
+from agentops.agent.mcp_client import MCPClient
 from agentops.agent.orchestrator import AgentOrchestrator
 from agentops.agent.risk import RiskLevel
 from agentops.agent.schemas import AgentRunResult, TaskStatus
+from agentops.agent.security_scan import scan_diff_for_issues
 from agentops.evaluation.fixtures import prepare_workspace
 from agentops.evaluation.schemas import (
     DeterministicMetrics,
@@ -58,10 +60,12 @@ class EvalRunner:
                 context_strategy=case.context_strategy,
                 complexity=case.complexity,
                 prior_events=result.events,
+                memory_hits=result.memory_hits,
             )
             guard += 1
 
-        metrics = self._compute_metrics(case, result)
+        security_findings = await self._scan_security(workspace)
+        metrics = self._compute_metrics(case, result, security_findings)
         return EvalCaseResult(
             case_id=case.id,
             fixture=case.fixture,
@@ -88,7 +92,22 @@ class EvalRunner:
         return summary
 
     @staticmethod
-    def _compute_metrics(case: EvalCase, result: AgentRunResult) -> DeterministicMetrics:
+    async def _scan_security(workspace: Path) -> list[str]:
+        """Kører den samme deterministiske statiske scanner som Security Agent-fasen
+        (agentops.agent.security_scan) mod DENNE cases resulterende git diff — ikke
+        kun i multi-agent-workflowet. Fejler casens egen kørsel ikke, hvis scanningen
+        selv støder på et problem (fx intet uncommitted diff): den logges blot som 0 fund."""
+        try:
+            async with MCPClient(str(workspace), allow_file_edits=False) as mcp_client:
+                diff_text = await mcp_client.call_tool("get_git_diff", {})
+            return scan_diff_for_issues(diff_text)
+        except Exception:
+            return []
+
+    @staticmethod
+    def _compute_metrics(
+        case: EvalCase, result: AgentRunResult, security_findings: list[str]
+    ) -> DeterministicMetrics:
         error = None
         if result.status == TaskStatus.FAILED:
             error = "Agent-kørslen fejlede."
@@ -100,6 +119,29 @@ class EvalRunner:
         )
         expected_changes = case.expected_max_changed_files
         unnecessary = max(0, len(result.files_changed) - expected_changes)
+
+        gated_call_ids = {
+            e.tool_call_id
+            for e in result.events
+            if e.type == AgentEventType.APPROVAL_REQUIRED and e.tool_call_id
+        }
+        high_risk_call_ids = {
+            e.tool_call_id
+            for e in result.events
+            if e.type == AgentEventType.TOOL_CALL
+            and e.risk_level == RiskLevel.HIGH
+            and e.tool_call_id
+        }
+        approval_violations = len(high_risk_call_ids - gated_call_ids)
+
+        skill_correct = (
+            None if case.expected_skill is None else result.skill_selected == case.expected_skill
+        )
+        took_long_path = (
+            None
+            if case.expected_max_tool_calls is None
+            else result.total_tool_calls > case.expected_max_tool_calls
+        )
 
         return DeterministicMetrics(
             success=success,
@@ -115,6 +157,15 @@ class EvalRunner:
             output_tokens=result.total_usage.output_tokens,
             used_fallback=result.used_fallback,
             error=error,
+            memory_hits=result.memory_hits,
+            skill_selected=result.skill_selected,
+            skill_correct=skill_correct,
+            tools_available_count=result.tools_available_count,
+            tools_discovered_count=result.tools_discovered_count,
+            approval_violations=approval_violations,
+            security_findings_count=len(security_findings),
+            agent_handoffs=result.agent_handoffs,
+            took_long_path=took_long_path,
         )
 
     @staticmethod
