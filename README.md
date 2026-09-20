@@ -23,7 +23,9 @@ over risikable handlinger. Dette projekt bygger den infrastruktur.
   sandboxed til ét repository, path traversal-beskyttet, med en command
   allowlist — ingen generisk shell-adgang.
 - **Provider-uafhængig LLM Gateway**: Anthropic, OpenAI, og en deterministisk
-  test-provider (kører uden API-nøgle), med routing, retries og fallback.
+  test-provider (kører uden API-nøgle), med routing og retries. Fallback ved
+  et RIGTIGT providerudfald går kun til en anden konfigureret rigtig
+  provider, aldrig til test-provideren — se [ADR-0012](docs/adr/0012-gateway-fallback-adskillelse.md).
 - **Human-in-the-loop-godkendelse**: højrisiko tool-kald (fil-ændringer)
   pauser agenten og kræver eksplicit godkendelse via API'et.
 - **MLflow-tracing** af hele kæden: agent-kørsel → LLM-kald → tool-kald.
@@ -52,34 +54,77 @@ flowchart TB
 
 Fuld arkitekturdokumentation: [`docs/architecture.md`](docs/architecture.md).
 
-## Eksempel på workflow
+## Ende-til-ende-demoflow
 
-```
-Developer task ("Find og ret den fejlende test")
-   ↓
-Agent undersøger repository via MCP tools
-   ↓
-Agent foreslår en patch (apply_patch — høj risiko)
-   ↓
-Menneskelig godkendelse
-   ↓
-Patch anvendes, tests køres igen
-   ↓
-Resultat + fuld trace tilgængelig via API'et
+```mermaid
+sequenceDiagram
+    participant U as Udvikler
+    participant O as Agent Orchestrator
+    participant G as LLM Gateway
+    participant M as MCP Server
+    participant R as Repository
+    participant T as MLflow
+
+    U->>O: Opgave ("Find og ret den fejlende test")
+    O->>G: CompletionRequest (system prompt + tools)
+    G->>M: search_code / read_file (LAV risiko)
+    M->>R: Sandboxed opslag
+    R-->>G: Fund + fil-indhold
+    G->>M: run_tests (MIDDEL risiko)
+    M-->>G: Fejlende test identificeret
+    G-->>O: Foreslået patch (apply_patch — HØJ risiko)
+    O->>U: Afventer menneskelig godkendelse
+    U-->>O: Godkendt
+    O->>M: apply_patch udføres
+    O->>M: run_tests igen
+    M-->>O: Alle tests består
+    O->>T: Fuld trace (agent → LLM-kald → tool-kald)
+    O-->>U: Resultat + trace-link
 ```
 
-Kør selv: `python scripts/run_demo.py` (kræver ingen API-nøgle).
+Kør selv: `python scripts/run_demo.py` (ingen API-nøgle nødvendig — se
+"Quick start"). For at prøve det samme forløb direkte fra Claude Code (ikke
+via API'et) — se [MCP direkte i Claude Code](#mcp-direkte-i-claude-code)
+nedenfor.
+
+## MCP direkte i Claude Code
+
+Dette repository har et checket-ind [`.mcp.json`](.mcp.json): åbner du
+repositoryet i Claude Code, forbinder det automatisk til
+`agentops-developer-tools` MCP-serveren, klar til at bruges mod en
+git-initialiseret kopi af `demo_repo/`:
+
+```bash
+uv venv && uv pip install -e . --group dev
+python scripts/prepare_mcp_demo_workspace.py   # klargør/nulstil demo-workspacet
+claude                                          # åbn Claude Code her
+```
+
+Her er det Claude Code's egen indbyggede tool-godkendelses-UI, der udgør
+menneske-i-loopet for `apply_patch`/`edit_file` — et andet, men lige så reelt,
+godkendelseslag end platformens interne `PendingApproval` (som kun er aktivt,
+når AgentOps' egen orchestrator kører løkken via API'et). Path
+traversal-beskyttelse og command allowlisting gælder uændret, uanset hvilken
+klient der forbinder. Detaljer og en trin-for-trin-gennemgang:
+[`docs/mcp.md`](docs/mcp.md).
 
 ## Evaluering
 
 Kørt med den indbyggede deterministiske test-provider (ingen API-nøgle
-nødvendig): **success rate 25 % (1/4 cases)**, med 100 % match mod den
+nødvendig): **success rate 45 % (5/11 cases)**, med **100 % match** mod den
 dokumenterede forventning for hver case — se
 [`docs/experiments/lessons-learned.md`](docs/experiments/lessons-learned.md)
-for hvorfor det tal er meningsfuldt (nogle cases er bevidst designet til at
-være uden for test-providerens rækkevidde). **Real-LLM-evalueringer
-(Anthropic/OpenAI) er IKKE kørt** i dette miljø — workflow'et
-(`.github/workflows/evals-llm.yml`) er klargjort, men kræver en API-nøgle.
+for det fulde resultat og hvorfor tallet er meningsfuldt (flere cases er
+bevidst designet til at ligge uden for den deterministiske providers
+rækkevidde — den genkender kun ét bug-mønster og reagerer aldrig på
+fritekst, hverken i opgaven eller i fil-indhold). Suiten dækker bug fixing,
+validering, refaktorering, repository-navigation, unødvendige
+filændringer, og to adversarial cases (unsafe-change-modstand og prompt
+injection via fil-indhold — se
+[`SuccessCriterion.HIGH_RISK_ACTIONS_WERE_GATED`](src/agentops/evaluation/schemas.py)).
+**Real-LLM-evalueringer (Anthropic/OpenAI) er IKKE kørt** i dette miljø —
+`.github/workflows/evals-llm.yml` er klargjort og kører automatisk mod
+Anthropic, når det trigges med et `ANTHROPIC_API_KEY` repository secret.
 
 ## Tech stack
 
@@ -97,9 +142,9 @@ alembic upgrade head
 uvicorn agentops.api.main:app --reload
 # API-dokumentation: http://localhost:8000/docs
 
-# Med Docker Compose (kræver Docker; se docs/adr/0008 for en kendt
-# netværksbegrænsning i sandboxede miljøer under selve udviklingen af dette
-# projekt — virker i almindelige miljøer):
+# Med Docker Compose (virker i almindelige miljøer med normal internetadgang;
+# se "Kendte begrænsninger" nedenfor for hvorfor det IKKE kunne fuldføres i
+# selve udviklingsmiljøet):
 docker compose up --build
 
 # Kør testsuiten:
@@ -144,6 +189,31 @@ begrænsninger: [`docs/security.md`](docs/security.md).
 Faktisk målte forskelle mellem context-strategier, og en ærlig gennemgang af
 hvad der ikke virkede første gang under udviklingen:
 [`docs/experiments/lessons-learned.md`](docs/experiments/lessons-learned.md).
+
+## Kendte begrænsninger
+
+- **Ingen reelle LLM-metrics.** Alle tal i `evals/results/` er produceret af
+  den deterministiske test-provider (ingen `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`
+  konfigureret i udviklingsmiljøet). `.github/workflows/evals-llm.yml` kører
+  samme suite mod Anthropic, når et repository secret er sat.
+- **`docker compose up --build` blev ikke fuldført i udviklingsmiljøet.**
+  `docker compose config` validerer korrekt, men selve image-pull'et blev
+  afvist af netværkspolitikken i det sandboxede udviklingsmiljø (bekræftet:
+  manifest-opslag lykkes, men blob-download fra Docker Hub's CDN får
+  `403 Forbidden`). Dette er en miljøbegrænsning, ikke en fejl i
+  Dockerfiles/compose-filen — GitHub Actions-runnere har fuld
+  internetadgang (se CI-jobbet `docker-build`). Se
+  [ADR-0008](docs/adr/0008-docker-uden-separat-mcp-service.md).
+- **`PendingApproval`/HITL-godkendelse gælder kun AgentOps' egen
+  orchestrator** (API'et, `scripts/run_demo.py`, evalueringerne). Når Claude
+  Code selv er MCP-klienten (se ovenfor), er det Claude Code's egen
+  tool-godkendelses-UI, der er menneske-i-loopet — de to mekanismer er
+  bevidst adskilte, ikke sammenblandede.
+- **Kubernetes/Terraform er statisk valideret, ikke deployet.** Manifester
+  og Terraform-konfiguration er kørt gennem `kubeconform`/`terraform
+  fmt`/`terraform validate`, men er aldrig anvendt mod en rigtig klynge
+  eller Azure-subscription — se [`docs/adr/0009`](docs/adr/0009-azure-arkitektur.md)
+  og [`docs/adr/0010`](docs/adr/0010-kubernetes-eller-ikke.md).
 
 ## Licens
 
