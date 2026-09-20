@@ -24,14 +24,17 @@ structlog, pytest, Docker/Docker Compose, GitHub Actions, Terraform
 
 - Designede og implementerede en AI-assisteret udviklerplatform med
   coding-agent orchestration, en rigtig MCP-server til kontrolleret
-  repository-adgang, og en provider-uafhængig LLM Gateway med
-  routing, retries og fallback mellem Anthropic, OpenAI og en deterministisk
-  test-provider.
+  repository-adgang (også direkte anvendelig fra Claude Code via et
+  checket-ind `.mcp.json`), og en provider-uafhængig LLM Gateway med
+  routing og retries, hvor fallback ved et rigtigt providerudfald kun går
+  til en anden konfigureret rigtig provider — aldrig til den
+  deterministiske test-provider (se ADR-0012).
 - Implementerede MLflow-baseret distribueret tracing (agent → LLM-kald →
-  tool-kald) og et reproducerbart evalueringsframework med deterministiske
-  metrics (task success, tests bestået, antal tool calls, unødvendige
-  filændringer) — verificeret til at give en målt success rate på 25 % med
-  den indbyggede test-provider, ikke en opdigtet 100 %.
+  tool-kald) og et reproducerbart evalueringsframework (11 cases,
+  inklusive adversarial cases for unsafe changes og prompt injection) med
+  deterministiske metrics (task success, tests bestået, antal tool calls,
+  unødvendige filændringer) — verificeret til at give en målt success rate
+  på 45 % med den indbyggede test-provider, ikke en opdigtet 100 %.
 - Byggede et human-in-the-loop-godkendelsessystem med tre risikoniveauer,
   containeriserede platformen med Docker, og satte CI/CD op med et separat
   "AI Quality Gate" (deterministiske agent-evalueringer som en del af
@@ -67,8 +70,8 @@ godkendelse via API'et, før de udføres.
 Alt logges som MLflow-spans — én agent-kørsel bliver ét trace med
 underliggende spans for hvert LLM-kald og tool-kald. Og fordi jeg ville have
 et ærligt billede af, om systemet rent faktisk virker, byggede jeg et
-evalueringsframework med fire benchmark-cases og deterministiske
-success-kriterier — det målte faktisk en success rate på 25 % med
+evalueringsframework med 11 benchmark-cases og deterministiske
+success-kriterier — det målte faktisk en success rate på 45 % med
 test-provideren, fordi den kun genkender ét bug-mønster, hvilket beviste, at
 kriterierne målte noget reelt i stedet for altid at returnere succes."
 
@@ -99,21 +102,28 @@ skal selv bede om det via MCP tools.
 Med en deterministisk test-provider — en lille state machine, der
 simulerer en scriptet tool-brugende samtale uden netværkskald. Det lod mig
 bygge og teste hele resten af systemet (orchestrator, godkendelsesflow,
-evalueringsframework, API) uden nogen API-nøgle, og gav 96 automatiske
+evalueringsframework, API) uden nogen API-nøgle, og gav 105 automatiske
 tests, jeg kunne køre reproducerbart.
 
 **5. Hvordan ved du, at evalueringerne faktisk måler noget?**
 Jeg designede bevidst benchmark-cases, hvor jeg forventede, at nogle ville
 lykkes og andre fejle med test-provideren (fordi den kun kan løse ét
-bug-mønster). Da jeg kørte suiten, matchede det faktiske resultat (25 %
-success rate) præcis den dokumenterede forventning — hvis alle cases havde
-givet succes eller fejl, ville det tyde på, at kriterierne ikke målte noget
-reelt.
+bug-mønster). Da jeg kørte suiten (11 cases, inklusive to adversarial cases
+for unsafe changes og prompt injection), matchede det faktiske resultat
+(45 % success rate, 100 % match mod den dokumenterede forventning for hver
+case) præcis det forventede — hvis alle cases havde givet succes eller
+fejl, ville det tyde på, at kriterierne ikke målte noget reelt.
 
 **6. Hvad sker der, hvis LLM-provideren er nede?**
-Gatewayen retryer med backoff og falder derefter tilbage til
-test-provideren — men resultatet markeres eksplicit som `used_fallback=true`
-overalt (traces, API-svar), så det aldrig fremstår som et rigtigt modelsvar.
+Gatewayen retryer med backoff. Hvis en ANDEN rigtig provider er konfigureret
+(fx OpenAI, når Anthropic er primær), falder den over til den — et ægte
+provider-til-provider failover, markeret eksplicit som `used_fallback=true`
+i traces og API-svar. Uden en anden rigtig provider konfigureret er der
+bevidst INTET fallback: opgaven markeres `FAILED` med en forklaring, i
+stedet for stille at falde tilbage til den deterministiske test-provider og
+risikere at fremstille et scriptet, ikke-repræsentativt svar som en løst
+opgave. Det var faktisk den oprindelige default (test-provideren som
+fallback for alle providers), som jeg rettede — se ADR-0012.
 
 **7. Hvordan fungerer human-in-the-loop rent teknisk?**
 Når orchestratoren støder på et højrisiko tool-kald, stopper den løkken,

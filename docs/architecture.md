@@ -101,9 +101,11 @@ præcis som Claude Code selv ville gøre. Det er derfor der ikke er en separat
 Provider-uafhængigt interface (`LLMProvider`) med tre implementeringer:
 `AnthropicProvider`, `OpenAIProvider`, og `DeterministicTestProvider`. Et
 `ModelRouter` vælger provider+model ud fra opgavens `TaskComplexity`
-(simpel/kompleks). `LLMGateway` lægger retries, fallback til
-test-provideren, og normaliseret fejlhåndtering oven på alt dette. Se
-`docs/adr/0002-llm-gateway.md`.
+(simpel/kompleks). `LLMGateway` lægger retries og normaliseret
+fejlhåndtering oven på alt dette. Fallback ved et rigtigt providerudfald
+går kun til en anden konfigureret rigtig provider (aldrig til
+test-provideren) — se `docs/adr/0002-llm-gateway.md` og
+`docs/adr/0012-gateway-fallback-adskillelse.md`.
 
 ### Persistence (`src/agentops/persistence/`)
 
