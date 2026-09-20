@@ -1,8 +1,17 @@
 """Bygger en LLMGateway fra Settings — registrerer kun providers, der reelt kan konstrueres.
 
 Anthropic/OpenAI-providers kræver en API-nøgle og springes stiltiende over,
-hvis den mangler (i stedet for at fejle ved opstart) — den deterministiske
-test-provider er altid tilgængelig og fungerer derfor som et sikkert fallback-net.
+hvis den mangler (i stedet for at fejle ved opstart).
+
+Fallback-provider ved et RIGTIGT providerudfald (efter retries) er ALDRIG den
+deterministiske test-provider her — se ADR-0012 for hvorfor det tidligere var
+default i selve `LLMGateway`-klassen, og hvorfor det var en fejl for
+produktionskoden at arve den default. I stedet: hvis en anden rigtig provider
+er konfigureret, bruges DEN som fallback (et ægte provider-til-provider
+failover); ellers er der intet fallback, og et udfald propagerer som en fejl,
+som API-laget fanger og markerer opgaven som `FAILED` med en tydelig
+begrundelse (se `agentops.api.routers.tasks`) — aldrig som et stiltiende,
+scriptet "success".
 """
 
 from __future__ import annotations
@@ -39,5 +48,15 @@ def build_gateway(settings: Settings) -> LLMGateway:
         )
         settings = settings.model_copy(update={"llm_default_provider": "test"})
 
+    real_providers = [name for name in providers if name != "test"]
+    fallback_provider = next(
+        (name for name in real_providers if name != settings.llm_default_provider), None
+    )
+
     router = ModelRouter(settings)
-    return LLMGateway(providers, router, max_retries=settings.llm_max_retries)
+    return LLMGateway(
+        providers,
+        router,
+        max_retries=settings.llm_max_retries,
+        fallback_provider=fallback_provider,
+    )

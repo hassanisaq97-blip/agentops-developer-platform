@@ -32,14 +32,30 @@ class LLMGateway:
         router: ModelRouter,
         *,
         max_retries: int = 2,
-        fallback_provider: str | None = "test",
+        fallback_provider: str | None = None,
     ):
+        """`fallback_provider` skal ALTID sættes eksplicit af den kaldende kode — se
+        ADR-0012. Den er `None` som default, ikke `"test"`: en gateway, der stille
+        falder tilbage til den deterministiske test-provider ved en RIGTIG providers
+        udfald, ville returnere en scriptet, ikke-repræsentativ patch og fremstille
+        den som en fuldført opgave. `agentops.gateway.factory.build_gateway` — den
+        eneste konstruktør, produktionskoden (FastAPI-appen, evals) bruger — sætter
+        `fallback_provider` til en ANDEN rigtig provider, hvis én er konfigureret,
+        eller `None`, så et rigtigt udfald fejler synligt i stedet for at blive
+        maskeret. Tests, der bevidst vil teste selve fallback-mekanismen, sætter
+        `fallback_provider="test"` eksplicit (se tests/unit/test_gateway.py)."""
         if not providers:
             raise ValueError("LLMGateway kræver mindst én registreret provider.")
         self._providers = providers
         self._router = router
         self._max_retries = max_retries
         self._fallback_provider = fallback_provider if fallback_provider in providers else None
+
+    @property
+    def fallback_provider(self) -> str | None:
+        """Eksponeret read-only, primært så `build_gateway`'s valgte fallback-politik
+        (se ADR-0012) kan verificeres af tests uden at kalde en rigtig provider."""
+        return self._fallback_provider
 
     def complete(self, request: CompletionRequest) -> CompletionResult:
         route = self._router.resolve(request)

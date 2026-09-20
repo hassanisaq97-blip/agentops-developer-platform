@@ -106,15 +106,22 @@ async def approve_task(
     conversation = task_repository.conversation_from_record(record)
     prior_events = task_repository.events_from_record(record)
 
-    result = await orchestrator.resume(
-        record.description,
-        Path(record.workspace_root),
-        conversation,
-        pending_schema,
-        approved=payload.approved,
-        context_strategy=ContextStrategy(record.context_strategy),
-        complexity=TaskComplexity(record.complexity),
-        prior_events=prior_events,
-    )
+    try:
+        result = await orchestrator.resume(
+            record.description,
+            Path(record.workspace_root),
+            conversation,
+            pending_schema,
+            approved=payload.approved,
+            context_strategy=ContextStrategy(record.context_strategy),
+            complexity=TaskComplexity(record.complexity),
+            prior_events=prior_events,
+        )
+    except Exception as exc:  # se create_task ovenfor: en fejlet genoptagelse skal give et forklaret task-resultat, ikke en 500'er
+        record.status = TaskStatus.FAILED.value
+        record.warnings = [f"Agent-kørslen fejlede uventet under genoptagelse: {exc}"]
+        session.flush()
+        return task_record_to_response(record)
+
     task_repository.apply_agent_result(session, record, result)
     return task_record_to_response(record)
