@@ -148,6 +148,15 @@ class EvalCaseResultResponse(BaseModel):
     tests_failed: int | None
     total_tool_calls: int
     files_changed_count: int
+    memory_hits: int
+    skill_selected: str | None
+    skill_correct: bool | None
+    tools_available_count: int
+    tools_discovered_count: int
+    approval_violations: int
+    security_findings_count: int
+    agent_handoffs: int
+    took_long_path: bool | None
 
 
 class EvalRunResponse(BaseModel):

@@ -129,6 +129,15 @@ def eval_summary_to_response(summary: EvalRunSummary) -> EvalRunResponse:
                 tests_failed=r.metrics.tests_failed,
                 total_tool_calls=r.metrics.total_tool_calls,
                 files_changed_count=r.metrics.files_changed_count,
+                memory_hits=r.metrics.memory_hits,
+                skill_selected=r.metrics.skill_selected,
+                skill_correct=r.metrics.skill_correct,
+                tools_available_count=r.metrics.tools_available_count,
+                tools_discovered_count=r.metrics.tools_discovered_count,
+                approval_violations=r.metrics.approval_violations,
+                security_findings_count=r.metrics.security_findings_count,
+                agent_handoffs=r.metrics.agent_handoffs,
+                took_long_path=r.metrics.took_long_path,
             )
             for r in summary.case_results
         ],

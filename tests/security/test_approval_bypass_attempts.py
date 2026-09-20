@@ -273,3 +273,44 @@ async def test_denying_a_multi_agent_developer_approval_leaves_no_file_changes(
 
     assert "apply_patch" not in {c[0] for c in fake_client.calls}
     assert final.files_changed == []
+
+
+async def test_multi_agent_test_phase_runs_read_only_and_cannot_leak_an_unhandled_approval_pause(
+    monkeypatch, tmp_path
+):
+    """Regression: Test-fasens opgavetekst ('Kør testsuiten...') matcher
+    test_generation-skillens nøgleord, hvis recommended_tools inkluderer
+    apply_patch. Uden allow_file_edits=False på Test-fasen kunne modellen
+    (i teorien) kalde apply_patch der, hvilket ville udløse AWAITING_APPROVAL
+    et sted, _after_developer_phase ikke tjekker for — en godkendelse, intet
+    menneske nogensinde ville se, og som ikke kan genoptages (se ADR-0015).
+    Denne test beviser roden til fixet: Test-fasens MCPClient konstrueres
+    ALTID med allow_file_edits=False, ligesom Security-fasens, så apply_patch/
+    edit_file aldrig optræder i dens tool-liste overhovedet."""
+    from agentops.agent.multi_agent import MultiAgentOrchestrator
+
+    constructed_with: list[bool] = []
+
+    def _recording_factory(*args, **kwargs):
+        constructed_with.append(kwargs.get("allow_file_edits", True))
+        return _FakeMCPClient()
+
+    monkeypatch.setattr("agentops.agent.orchestrator.MCPClient", _recording_factory)
+    monkeypatch.setattr("agentops.agent.multi_agent.MCPClient", _recording_factory)
+
+    settings = Settings(llm_default_provider="test", agent_auto_approve_high_risk=True)
+    provider = _ScriptedProvider(
+        [
+            _final_answer_result("Developer-fasens svar (mock)."),
+            _final_answer_result("Test-fasens svar (mock)."),
+        ]
+    )
+    gateway = LLMGateway({"test": provider}, ModelRouter(settings), fallback_provider=None)
+    workflow = MultiAgentOrchestrator(gateway, settings)
+
+    result = await workflow.run("Der er en bug, ret fejlen.", tmp_path)
+
+    assert result.status == TaskStatus.COMPLETED
+    # Developer-fasen (standard, kan redigere filer), Test-fasen og Security-fasen
+    # (begge skal være read-only) — i den rækkefølge.
+    assert constructed_with == [True, False, False]

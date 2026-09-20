@@ -84,6 +84,7 @@ class AgentOrchestrator:
         complexity: TaskComplexity = TaskComplexity.SIMPLE,
         on_checkpoint: OnCheckpoint | None = None,
         max_continuous_steps: int | None = None,
+        allow_file_edits: bool = True,
     ) -> AgentRunResult:
         with mlflow.start_span(name="agent_run", span_type=SpanType.AGENT) as span:
             span.set_inputs(
@@ -100,6 +101,7 @@ class AgentOrchestrator:
                 complexity=complexity,
                 on_checkpoint=on_checkpoint,
                 max_continuous_steps=max_continuous_steps,
+                allow_file_edits=allow_file_edits,
             )
             await self._maybe_save_memory(workspace_root, task, result)
             span.set_outputs(self._span_outputs(result))
@@ -114,6 +116,7 @@ class AgentOrchestrator:
         complexity: TaskComplexity,
         on_checkpoint: OnCheckpoint | None = None,
         max_continuous_steps: int | None = None,
+        allow_file_edits: bool = True,
     ) -> AgentRunResult:
         skill = select_skill(task)
         system_prompt = build_system_prompt(context_strategy, workspace_root, task)
@@ -149,7 +152,7 @@ class AgentOrchestrator:
             result.memory_hits = len(memories)
             return result
 
-        async with MCPClient(str(workspace_root)) as mcp_client:
+        async with MCPClient(str(workspace_root), allow_file_edits=allow_file_edits) as mcp_client:
             all_tools = await mcp_client.list_tool_definitions()
             tools = self._select_tools(task, all_tools, skill)
             if self._settings.agent_dynamic_tool_discovery:

@@ -54,12 +54,12 @@ async def create_workflow(
             context_strategy=payload.context_strategy,
             complexity=payload.complexity,
         )
-    except Exception as exc:  # se agentops.api.routers.tasks for samme princip
+    except Exception:  # bevidst bredt: se agentops.api.routers.tasks for samme princip —
+        # en fejlet workflow-kørsel skal give et forklaret resultat, ikke en 500'er.
+        # (raise her ville lade session_scope rulle FAILED-status tilbage igen.)
         record.status = TaskStatus.FAILED.value
         session.flush()
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR, f"Workflowet fejlede uventet: {exc}"
-        ) from exc
+        return workflow_record_to_response(record)
 
     workflow_repository.apply_workflow_result(session, record, result)
     return workflow_record_to_response(record)
@@ -109,12 +109,10 @@ async def approve_workflow(
             developer_events=events,
             memory_hits=record.memory_hits,
         )
-    except Exception as exc:
+    except Exception:  # se create_workflow ovenfor: samme princip for genoptagelse
         record.status = TaskStatus.FAILED.value
         session.flush()
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR, f"Workflowet fejlede uventet: {exc}"
-        ) from exc
+        return workflow_record_to_response(record)
 
     workflow_repository.apply_workflow_result(session, record, result)
     return workflow_record_to_response(record)

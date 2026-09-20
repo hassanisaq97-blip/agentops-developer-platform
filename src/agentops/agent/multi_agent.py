@@ -83,13 +83,13 @@ class MultiAgentOrchestrator:
         self._memory_retriever = memory_retriever
         self._memory_saver = memory_saver
 
-    def _phase_orchestrator(self, max_steps: int) -> AgentOrchestrator:
+    def _phase_orchestrator(self, max_steps: int, *, with_memory: bool = True) -> AgentOrchestrator:
         phase_settings = self._settings.model_copy(update={"agent_max_tool_calls": max_steps})
         return AgentOrchestrator(
             self._gateway,
             phase_settings,
-            memory_retriever=self._memory_retriever,
-            memory_saver=self._memory_saver,
+            memory_retriever=self._memory_retriever if with_memory else None,
+            memory_saver=self._memory_saver if with_memory else None,
         )
 
     async def run(
@@ -212,13 +212,25 @@ class MultiAgentOrchestrator:
         phases = [developer_phase]
         handoffs = 1
 
-        test_orchestrator = self._phase_orchestrator(self._settings.multi_agent_test_max_steps)
+        # with_memory=False: Test-fasens opgavetekst er en fast, generisk streng
+        # ("Kør testsuiten...") for enhver opgave — at gemme/genfinde memory for den
+        # ville forurene workspacets memory-søgning for fremtidige, RIGTIGE Developer-opgaver.
+        test_orchestrator = self._phase_orchestrator(
+            self._settings.multi_agent_test_max_steps, with_memory=False
+        )
         with mlflow.start_span(name="multi_agent_phase:test", span_type=SpanType.AGENT) as span:
+            # allow_file_edits=False: Test-fasens eneste job er at køre testsuiten og
+            # rapportere resultatet, den skal aldrig kunne ændre filer. Uden dette ville
+            # edit_file/apply_patch (fx via test_generation-skillens recommended_tools,
+            # som "testsuiten" matcher på nøgleord) kunne udløse et HIGH-risk tool call,
+            # og dermed AWAITING_APPROVAL — en tilstand, som denne fase ikke ved, hvordan
+            # den skal eksponere til et menneske (kun Developer-fasen har den kobling).
             test_result = await test_orchestrator.run(
                 "Kør testsuiten og rapportér resultatet.",
                 workspace_root,
                 context_strategy=context_strategy,
                 complexity=complexity,
+                allow_file_edits=False,
             )
             span.set_outputs(
                 {"tests_passed": test_result.tests_passed, "tests_failed": test_result.tests_failed}
