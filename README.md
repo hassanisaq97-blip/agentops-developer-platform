@@ -28,7 +28,27 @@ over risikable handlinger. Dette projekt bygger den infrastruktur.
   provider, aldrig til test-provideren — se [ADR-0012](docs/adr/0012-gateway-fallback-adskillelse.md).
 - **Human-in-the-loop-godkendelse**: højrisiko tool-kald (fil-ændringer)
   pauser agenten og kræver eksplicit godkendelse via API'et.
-- **MLflow-tracing** af hele kæden: agent-kørsel → LLM-kald → tool-kald.
+- **Persistent agent-memory** (off by default): udtrukne, sanitiserede
+  resuméer fra tidligere opgaver — aldrig rå samtaler — scoped pr. workspace,
+  med indbygget forsvar mod at gemme prompt-injection-forsøg som tillid
+  værdig erfaring. Se [ADR-0013](docs/adr/0013-agent-memory.md).
+- **Skills** (debugging, security review, test generation,
+  database/migration review, API review): en billig, deterministisk
+  keyword-klassificering vælger den relevante skill FØR noget LLM-kald —
+  agenten ser aldrig alle skill-instruktioner på én gang.
+- **Dynamisk MCP tool discovery** (off by default): sender kun de tools til
+  modellen, den valgte skill faktisk anbefaler, i stedet for altid alle ni —
+  målt til at reducere både tool calls og tokens uden at ændre resultatet.
+- **Checkpoint-baserede langvarige opgaver**: fremskridt gemmes og
+  committes løbende under en kørsel, en opgave kan bevidst sættes på pause
+  og genoptages senere, og en uventet API-nedlukning gendannes sikkert (aldrig
+  ved at genoptage LLM-kald automatisk) — se [ADR-0014](docs/adr/0014-skills-tool-discovery-long-running.md).
+- **Kontrolleret multi-agent workflow** (Developer → Test → Security →
+  Reviewer): en fast, ikke-cyklisk pipeline bygget oven på den samme
+  orchestrator — Security-fasen er en ægte deterministisk statisk scanning,
+  ikke et LLM-kald der ikke kan verificeres. Se [ADR-0015](docs/adr/0015-multi-agent-workflow.md).
+- **MLflow-tracing** af hele kæden: agent-kørsel → LLM-kald → tool-kald →
+  memory → multi-agent-faser, som nestede spans i ét samlet trace.
 - **Reproducerbart evalueringsframework** med deterministiske
   success-kriterier — ikke en models egen selvvurdering.
 - **PostgreSQL + Alembic-migrations**, Docker/Docker Compose, GitHub Actions
@@ -40,7 +60,11 @@ over risikable handlinger. Dette projekt bygger den infrastruktur.
 ```mermaid
 flowchart TB
     Dev([Udvikler]) --> API[FastAPI]
-    API --> Orch[Agent Orchestrator]
+    API --> Memory[Agent Memory]
+    Memory --> Skills[Skill Selection]
+    Skills --> Discovery[Dynamic Tool Discovery]
+    Discovery --> Orch[Agent Orchestrator / Long-running Tasks]
+    Orch --> MultiAgent[Multi-Agent Workflow: Dev → Test → Security → Reviewer]
     Orch --> Gateway[LLM Gateway]
     Gateway --> Anthropic[Anthropic]
     Gateway --> OpenAI[OpenAI]
@@ -50,6 +74,7 @@ flowchart TB
     API --> DB[(PostgreSQL)]
     Orch -.trace.-> MLflow[(MLflow)]
     Orch --> Approval{{Human-in-the-loop godkendelse}}
+    Orch --> Evals[Evaluation Framework]
 ```
 
 Fuld arkitekturdokumentation: [`docs/architecture.md`](docs/architecture.md).
@@ -111,7 +136,7 @@ klient der forbinder. Detaljer og en trin-for-trin-gennemgang:
 ## Evaluering
 
 Kørt med den indbyggede deterministiske test-provider (ingen API-nøgle
-nødvendig): **success rate 45 % (5/11 cases)**, med **100 % match** mod den
+nødvendig): **success rate 36 % (5/14 cases)**, med **100 % match** mod den
 dokumenterede forventning for hver case — se
 [`docs/experiments/lessons-learned.md`](docs/experiments/lessons-learned.md)
 for det fulde resultat og hvorfor tallet er meningsfuldt (flere cases er
@@ -119,9 +144,18 @@ bevidst designet til at ligge uden for den deterministiske providers
 rækkevidde — den genkender kun ét bug-mønster og reagerer aldrig på
 fritekst, hverken i opgaven eller i fil-indhold). Suiten dækker bug fixing,
 validering, refaktorering, repository-navigation, unødvendige
-filændringer, og to adversarial cases (unsafe-change-modstand og prompt
-injection via fil-indhold — se
+filændringer, korrekt skill-selection, og to adversarial cases
+(unsafe-change-modstand og prompt injection via fil-indhold — se
 [`SuccessCriterion.HIGH_RISK_ACTIONS_WERE_GATED`](src/agentops/evaluation/schemas.py)).
+Metrics inkluderer nu også memory-hits, valgt skill, antal tools
+tilgængelige/sendt til modellen, `approval_violations` (skal altid være 0)
+og sikkerhedsfund fra en deterministisk diff-scanning.
+
+Tre faktiske sammenligninger (uden vs. med memory, alle tools vs. dynamisk
+discovery, single vs. multi-agent) er kørt og resultaterne gemt under
+[`docs/experiments/`](docs/experiments/) — se lessons-learned for tallene og
+hvad de rent faktisk viser (og ikke viser) med en scriptet provider.
+
 **Real-LLM-evalueringer (Anthropic/OpenAI) er IKKE kørt** i dette miljø —
 `.github/workflows/evals-llm.yml` er klargjort og kører automatisk mod
 Anthropic, når det trigges med et `ANTHROPIC_API_KEY` repository secret.
@@ -165,9 +199,10 @@ src/agentops/
   security/      sandboxing, command allowlist, secret-redaction
   mcp_server/     MCP-serveren og dens developer tools
   gateway/        provider-uafhængig LLM Gateway
-  agent/          coding agent orchestrator, risk, context-strategier
-  persistence/    SQLAlchemy-modeller
-  api/            FastAPI-applikationen
+  agent/          orchestrator, multi-agent workflow, skills, tool discovery, risk
+  memory/         persistent agent-memory (udtræk, sanitisering, lager)
+  persistence/    SQLAlchemy-modeller (tasks, workflows, memory, evalueringer)
+  api/            FastAPI-applikationen (tasks-, workflows-, evaluerings-routere)
   evaluation/     evalueringsframework
   observability/  MLflow-tracing, struktureret logging
 evals/fixtures/    target-repositories til evalueringer
@@ -214,6 +249,11 @@ hvad der ikke virkede første gang under udviklingen:
   fmt`/`terraform validate`, men er aldrig anvendt mod en rigtig klynge
   eller Azure-subscription — se [`docs/adr/0009`](docs/adr/0009-azure-arkitektur.md)
   og [`docs/adr/0010`](docs/adr/0010-kubernetes-eller-ikke.md).
+- **Memory- og multi-agent-kvalitet er kun mekanisk verificeret.** At
+  memory rent faktisk forbedrer en RIGTIG models løsning, og at Security
+  Agent-fasens deterministiske scanning matcher et rigtigt sikkerhedsreview,
+  er ikke målt — kun at selve mekanikken (hent/gem/filtrér/eksekvér)
+  fungerer korrekt. Se `docs/experiments/lessons-learned.md`, punkt 8-9.
 
 ## Licens
 

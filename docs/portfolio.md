@@ -7,11 +7,15 @@
 ## Kort beskrivelse
 
 En observerbar og evaluerbar AI-platform til agent-assisteret
-softwareudvikling. En coding agent modtager en softwareopgave, undersøger og
-ændrer et repository gennem en rigtig MCP-server (kontrolleret context
-acquisition, ikke "hele repoet i prompten"), med human-in-the-loop-godkendelse
-af risikable handlinger, fuld MLflow-tracing, og et reproducerbart
-evalueringsframework med deterministiske success-kriterier.
+softwareudvikling. En coding agent modtager en softwareopgave, henter
+relevant erfaring fra en persistent memory, vælger en modulær skill, og
+undersøger og ændrer et repository gennem en rigtig MCP-server (kontrolleret
+context acquisition, ikke "hele repoet i prompten"), med
+human-in-the-loop-godkendelse af risikable handlinger. Større opgaver kan
+køre som et kontrolleret multi-agent-forløb (Developer/Test/Security/
+Reviewer) eller som en enkelt, genoptagelig agent med checkpoints. Alt
+spores i MLflow, og et reproducerbart evalueringsframework måler resultatet
+med deterministiske success-kriterier.
 
 ## Tech stack (faktisk implementeret)
 
@@ -30,25 +34,39 @@ structlog, pytest, Docker/Docker Compose, GitHub Actions, Terraform
   til en anden konfigureret rigtig provider — aldrig til den
   deterministiske test-provider (se ADR-0012).
 - Implementerede MLflow-baseret distribueret tracing (agent → LLM-kald →
-  tool-kald) og et reproducerbart evalueringsframework (11 cases,
+  tool-kald) og et reproducerbart evalueringsframework (14 cases,
   inklusive adversarial cases for unsafe changes og prompt injection) med
   deterministiske metrics (task success, tests bestået, antal tool calls,
-  unødvendige filændringer) — verificeret til at give en målt success rate
-  på 45 % med den indbyggede test-provider, ikke en opdigtet 100 %.
+  tokens, skill-valg-korrekthed, godkendelsesovertrædelser) — verificeret
+  til at give en målt success rate på 36 % (5/14) med den indbyggede
+  test-provider, ikke en opdigtet 100 %.
 - Byggede et human-in-the-loop-godkendelsessystem med tre risikoniveauer,
   containeriserede platformen med Docker, og satte CI/CD op med et separat
   "AI Quality Gate" (deterministiske agent-evalueringer som en del af
   pipeline'en, adskilt fra dyre real-LLM-evalueringer).
+- Videreudviklede platformen med seks agent-funktioner uden at svække det
+  eksisterende sikkerhedslag: persistent, sanitiseret agent-memory i
+  PostgreSQL (aldrig hele samtaler, kun strukturerede erfaringer), et
+  modulært skills-system med dynamisk skill-selection, dynamisk MCP
+  tool-discovery, checkpoint-baserede genoptagelige opgaver, og et
+  4-fase multi-agent-workflow (Developer/Test/Security/Reviewer) — alt
+  dækket af 184 automatiske tests, deriblandt dedikerede
+  sikkerhedstests for memory-poisoning, ondsindede skills og
+  cross-phase prompt injection.
 
 ## 30-sekunders forklaring (til jobsamtale)
 
 "Jeg byggede en platform, hvor en coding agent løser softwareopgaver ved at
 bruge en rigtig MCP-server til at undersøge et repository — søge i kode,
 læse filer, køre tests — i stedet for at få hele repoet proppet ind i
-prompten. Højrisiko-handlinger som at ændre filer kræver menneskelig
-godkendelse. Alting spores i MLflow, og jeg byggede et evalueringsframework,
-der måler, om agenten faktisk løste opgaven, med objektive kriterier — ikke
-bare modellens egen vurdering af sig selv."
+prompten. Agenten husker relevante erfaringer fra tidligere opgaver i samme
+repository, vælger dynamisk en skill i stedet for at få alle instruktioner
+på forhånd, og kan for større opgaver samarbejde som et kontrolleret
+multi-agent-team med en Developer-, Test-, Security- og Reviewer-rolle.
+Højrisiko-handlinger som at ændre filer kræver menneskelig godkendelse.
+Alting spores i MLflow, og jeg byggede et evalueringsframework, der måler,
+om agenten faktisk løste opgaven, med objektive kriterier — ikke bare
+modellens egen vurdering af sig selv."
 
 ## 2-minutters teknisk forklaring
 
@@ -67,15 +85,28 @@ kunne teste og demonstrere hele systemet uden en API-nøgle. Risikable
 tool-kald som at ændre en fil stopper løkken og venter på en eksplicit
 godkendelse via API'et, før de udføres.
 
-Alt logges som MLflow-spans — én agent-kørsel bliver ét trace med
-underliggende spans for hvert LLM-kald og tool-kald. Og fordi jeg ville have
-et ærligt billede af, om systemet rent faktisk virker, byggede jeg et
-evalueringsframework med 11 benchmark-cases og deterministiske
-success-kriterier — det målte faktisk en success rate på 45 % med
-test-provideren, fordi den kun genkender ét bug-mønster, hvilket beviste, at
-kriterierne målte noget reelt i stedet for altid at returnere succes."
+Oven på det byggede jeg fire nye lag, alle bevaret bag de samme
+sikkerhedsgrænser: en persistent memory i PostgreSQL, der kun gemmer
+strukturerede, sanitiserede erfaringer (aldrig rå samtaler) og udelukker
+alt, der matcher kendte prompt-injection-mønstre; et modulært
+skills-system, hvor orchestratoren først identificerer opgavetypen og
+derefter henter kun den relevante skills instruktioner; dynamisk
+tool-discovery, så modellen ikke nødvendigvis ser alle MCP-tool-schemas fra
+start; og checkpoint-baserede, genoptagelige opgaver, så en API-genstart
+ikke nødvendigvis taber fremskridt. Til større opgaver kan det hele køre
+som et 4-fase multi-agent-workflow med en fast, ikke-cyklisk rækkefølge og
+en deterministisk security-scanner i stedet for endnu et LLM-kald.
 
-## 10 sandsynlige interviewspørgsmål — og svar baseret på det faktiske projekt
+Alt logges som MLflow-spans — én agent-kørsel bliver ét trace med
+underliggende spans for hvert LLM-kald, tool-kald, memory-opslag og
+agent-fase. Og fordi jeg ville have et ærligt billede af, om systemet rent
+faktisk virker, byggede jeg et evalueringsframework med 14 benchmark-cases
+og deterministiske success-kriterier — det målte faktisk en success rate på
+36 % (5/14) med test-provideren, fordi den kun genkender ét bug-mønster,
+hvilket beviste, at kriterierne målte noget reelt i stedet for altid at
+returnere succes."
+
+## 13 sandsynlige interviewspørgsmål — og svar baseret på det faktiske projekt
 
 **1. Hvorfor MCP i stedet for at kalde funktioner direkte?**
 MCP er en åben standard, der lader samme server bruges af min egen
@@ -102,17 +133,18 @@ skal selv bede om det via MCP tools.
 Med en deterministisk test-provider — en lille state machine, der
 simulerer en scriptet tool-brugende samtale uden netværkskald. Det lod mig
 bygge og teste hele resten af systemet (orchestrator, godkendelsesflow,
-evalueringsframework, API) uden nogen API-nøgle, og gav 105 automatiske
-tests, jeg kunne køre reproducerbart.
+evalueringsframework, memory, skills, multi-agent-workflow, API) uden nogen
+API-nøgle, og gav 184 automatiske tests, jeg kunne køre reproducerbart.
 
 **5. Hvordan ved du, at evalueringerne faktisk måler noget?**
 Jeg designede bevidst benchmark-cases, hvor jeg forventede, at nogle ville
 lykkes og andre fejle med test-provideren (fordi den kun kan løse ét
-bug-mønster). Da jeg kørte suiten (11 cases, inklusive to adversarial cases
-for unsafe changes og prompt injection), matchede det faktiske resultat
-(45 % success rate, 100 % match mod den dokumenterede forventning for hver
-case) præcis det forventede — hvis alle cases havde givet succes eller
-fejl, ville det tyde på, at kriterierne ikke målte noget reelt.
+bug-mønster). Da jeg kørte suiten (14 cases, inklusive adversarial cases
+for unsafe changes og prompt injection, plus tre nye "skill-selection
+probes"), matchede det faktiske resultat (36 % success rate — 5/14, 100 %
+match mod den dokumenterede forventning for hver case) præcis det
+forventede — hvis alle cases havde givet succes eller fejl, ville det tyde
+på, at kriterierne ikke målte noget reelt.
 
 **6. Hvad sker der, hvis LLM-provideren er nede?**
 Gatewayen retryer med backoff. Hvis en ANDEN rigtig provider er konfigureret
@@ -146,7 +178,40 @@ forbindelsen åben, og autentificering/autorisation på API-endpoints — ingen
 af de eksisterer i dag, og det er dokumenteret eksplicit som kendte
 begrænsninger, ikke skjulte antagelser.
 
-**10. Hvad var den sværeste bug, du stødte på?**
+**10. Hvordan sikrede du, at agent-memory ikke bliver et nyt
+prompt-injection-angrebspunkt?**
+Memory bygges UDELUKKENDE fra allerede-strukturerede felter i resultatet af
+en kørsel (hvilke tools blev brugt, hvilke filer blev ændret, bestod
+testene) — aldrig fra rå tool-output eller modellens frie tekst. Enhver
+tekst, der bliver til en memory-post, køres desuden gennem en sanitizer, der
+genkender kendte injection-mønstre og markerer posten som "flagged"; søgning
+udelukker altid flagged rækker, fail-closed. Jeg testede det eksplicit med
+fire forskellige angrebsformuleringer i `tests/security/test_memory_poisoning.py`.
+
+**11. Er multi-agent-workflowet "rigtige" flere AI'er, der taler sammen?**
+Nej, og det er bevidst. Developer- og Test-fasen er hver én afgrænset
+kørsel af den samme orchestrator med sit eget trin-budget. Security-fasen
+er slet ikke et LLM-kald — den er en deterministisk statisk scanner af den
+faktiske git diff, netop for at den ikke kan overtales af tekst fra en
+tidligere fase. Reviewer-fasens konklusion er ren Python-syntese af de
+andre fasers success-flag, ikke en LLM-fortolkning. Det giver en fast,
+ikke-cyklisk pipeline med en klar afslutningsregel i stedet for agenter, der
+taler ubegrænset sammen — og jeg målte faktisk merprisen: 8 mod 6 tool
+calls og ca. 4 % flere tokens for samme opgave, for uafhængig
+gentest og en struktureret verdict.
+
+**12. Hvad beviste den dynamiske tool-discovery-eksperiment reelt?**
+At den kan reducere antallet af tools, modellen ser, uden at ændre
+opgaveudfaldet — for `security_review_probe` og `api_review_probe` faldt
+input-tokens fra hhv. 156→57 og 161→60, og tool-listen fra 9 til 4-6
+relevante tools, målt med `scripts/run_tool_discovery_experiment.py` og
+gemt i `docs/experiments/tool-discovery-results.json`. For memory-effekten
+var jeg ærlig om begrænsningen: den deterministiske test-provider kan ikke
+adfærdsmæssigt "bruge" en prompt, så det, jeg reelt kunne verificere, var
+mekanikken (memory bliver gemt og genfundet korrekt på tværs af to kørsler
+i samme workspace) — en reel adfærdsforskel ville kræve en rigtig LLM.
+
+**13. Hvad var den sværeste bug, du stødte på?**
 En forklarende kommentar i en test-fixture (`# BUG: skal være a + b`) fik
 den deterministiske providers naive regex til at matche den forkerte linje i
 en anden funktion og ødelægge den i stedet for at rette den tiltænkte bug.

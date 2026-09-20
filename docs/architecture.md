@@ -8,22 +8,29 @@ komponenterne hænger sammen, og hvorfor de er designet, som de er.
 ```mermaid
 flowchart TB
     Dev([Udvikler]) --> API[FastAPI]
-    API --> Orch[Agent Orchestrator]
+    API --> Orch[Agent Orchestrator /\nMulti-Agent Orchestrator]
+
+    Mem[(Memory\nPostgreSQL)] --> Orch
+    Orch --> Skills[Skill Selection]
+    Skills --> Discovery[Dynamic Tool Discovery]
+
     Orch --> Gateway[LLM Gateway]
     Gateway --> Anthropic[Anthropic]
     Gateway --> OpenAI[OpenAI]
     Gateway --> TestProvider[Deterministic Test Provider]
 
-    Orch -- "stdio, spawnet subprocess" --> MCP[MCP Server]
+    Discovery -- "stdio, spawnet subprocess" --> MCP[MCP Server]
     MCP --> Sandbox[WorkspaceSandbox]
     Sandbox --> Repo[(Target-repository)]
+
+    Orch --> Approval{{Human-in-the-loop\ngodkendelse}}
+    Orch -.checkpoint.-> Tasks[(PostgreSQL\ntask/workflow-state)]
+    Orch --> Mem
 
     API --> DB[(PostgreSQL\napplikations-state)]
     Orch -.trace.-> MLflow[(MLflow\nobservability)]
     Gateway -.trace.-> MLflow
     MCP -.trace.-> MLflow
-
-    Orch --> Approval{{Human-in-the-loop\ngodkendelse}}
 
     subgraph CI["CI/CD"]
       Evals[Evaluation Framework] --> Gate[AI Quality Gate]
@@ -32,11 +39,16 @@ flowchart TB
 ```
 
 **Læsevejledning:** en udvikler sender en opgave til FastAPI, som overdrager
-den til Agent Orchestrator. Orchestratoren beder LLM Gateway'et om et
-modelsvar og spawner MCP-serveren som en separat proces, hver gang den skal
-undersøge eller ændre repositoryet. Alt logges som spans til MLflow.
-Operationel state (opgaver, godkendelser, evalueringsresultater) ligger i
-PostgreSQL — adskilt fra MLflow's observability-data.
+den til Agent Orchestrator (eller Multi-Agent Orchestrator for et
+flerfase-forløb). Orchestratoren henter relevant memory fra tidligere
+opgaver i samme workspace, vælger en skill ud fra opgaveteksten, og
+begrænser (valgfrit) hvilke MCP-tools modellen ser, før den beder LLM
+Gateway'et om et modelsvar. MCP-serveren spawnes som en separat proces, hver
+gang repositoryet skal undersøges eller ændres. Fremskridt gemmes løbende som
+checkpoints i PostgreSQL, så en genstart ikke nødvendigvis taber arbejdet.
+Alt logges som spans til MLflow. Operationel state (opgaver, workflows,
+godkendelser, memory, evalueringsresultater) ligger i PostgreSQL — adskilt
+fra MLflow's observability-data.
 
 ## Komponenter
 
@@ -86,6 +98,79 @@ chain-of-thought eksponeres aldrig; kun disse strukturerede beslutninger.
 Høj-risiko tool calls (`edit_file`, `apply_patch`) stopper løkken og
 returnerer status `awaiting_approval`. `AgentOrchestrator.resume()` genoptager
 kørslen, når et menneske har godkendt eller afvist via API'et.
+
+### Agent Memory (`src/agentops/memory/`)
+
+Persistent, workspace-scoped hukommelse i PostgreSQL (tabel
+`agent_memories`), der giver agenten adgang til erfaringer fra tidligere
+opgaver i samme repository — ikke hele gamle samtaler. `extract_memories`
+udtrækker højst tre poster PR. opgave (task-outcome, tool-effectiveness,
+lesson-learned) UDELUKKENDE fra allerede-strukturerede felter i
+`AgentRunResult` (`tools_used`, `files_changed`, `tests_passed/failed`) —
+aldrig fra rå tool-output eller konversationstekst. Hver tekst køres gennem
+`agentops.memory.sanitize`, som afviser kendte injection-mønstre og
+markerer posten `flagged`; `MemoryStore.search` udelukker altid flagged
+rækker, fail-closed. Orchestratoren kender ikke til SQLAlchemy direkte — den
+modtager to almindelige async callables (`memory_retriever`, `memory_saver`),
+samme mønster som `task_repository` bruges i API-laget. Se
+[ADR-0013](adr/0013-agent-memory.md) og `docs/security.md` §9.
+
+### Agent Skills (`src/agentops/agent/skills.py`)
+
+Et modulært skills-system med indbyggede skills for debugging,
+security-review, test-generation, database/migration-review og API-review.
+`select_skill(task)` matcher opgaveteksten mod hver skills nøgleord
+DETERMINISTISK, før noget LLM-kald sker — kun den vindende skill (hvis
+nogen) tilføjes til system-prompten, aldrig alle skills på forhånd. En skill
+er ren data (`Skill`-modellen): instruktioner, anbefalede MCP-tools,
+sikkerhedsregler og checks. At tilføje en ny skill kræver kun én ny
+`Skill`-instans i `SKILLS`-listen. Skill-indhold har ingen kodesti ind i
+risikoklassificeringen — se `docs/security.md` §10.
+
+### Dynamic MCP Tool Discovery (`src/agentops/agent/tool_discovery.py`)
+
+Når `AGENT_DYNAMIC_TOOL_DISCOVERY=true`, sender orchestratoren ikke alle
+MCP-tool-schemas til modellen fra start. `discover_relevant_tools` filtrerer
+til den valgte skills `recommended_tools`, eller et nøgleords-fallback, hvis
+ingen skill matchede. Matcher intet overhovedet, er politikken bevidst
+**fail-open**: hele værktøjskassen returneres uændret — i modsætning til
+risk-godkendelse, som er fail-closed. Det er kun hvilke SCHEMAS modellen ser,
+der filtreres; selve godkendelsestjekket kører uændret på de tool calls,
+modellen rent faktisk foretager (`docs/security.md` §12). Se målt
+token-/tool-call-forskel i `docs/experiments/`.
+
+### Long-running Tasks (checkpoints i `src/agentops/agent/orchestrator.py`)
+
+En opgave behøver ikke afsluttes i ét sammenhængende kald. Efter hvert
+agent-trin kaldes en `on_checkpoint`-callback, der committer
+konversationstilstand og events til PostgreSQL med det samme (ikke kun
+flush) — en API-genstart taber derfor ikke nødvendigvis fremskridt.
+`max_continuous_steps` kan sætte en opgave på PAUSED (en ny `TaskStatus`,
+adskilt fra `awaiting_approval`) efter et fast antal trin, og
+`AgentOrchestrator.continue_task()` genoptager den. Ved opstart scanner
+`recover_interrupted_tasks` for opgaver, der stod som `running`, da
+processen sidst stoppede: findes et checkpoint, markeres opgaven `paused`
+(klar til at blive fortsat via API'et); findes intet, markeres den `failed`.
+Der sker ALDRIG automatisk genoptagelse uden en eksplicit
+`POST /tasks/{id}/continue`. Se [ADR-0014](adr/0014-skills-tool-discovery-long-running.md).
+
+### Multi-Agent Workflow (`src/agentops/agent/multi_agent.py`)
+
+Et kontrolleret, ikke-cyklisk 4-fase-forløb — Developer → Test → Security →
+Reviewer — bygget oven på den samme `AgentOrchestrator`, ikke en ny
+agent-mekanisme. Hver fase er én afgrænset orchestrator-kørsel med sit eget
+trin-budget. Developer-fasen løser opgaven og pauser for menneskelig
+godkendelse ved høj-risiko handlinger, præcis som i enkelt-agent-flowet.
+Test-fasen kører testsuiten uafhængigt. Security-fasen er bevidst **ikke**
+et LLM-kald — den scanner den faktiske `git diff` deterministisk
+(`agentops.agent.security_scan.scan_diff_for_issues`), så den ikke kan
+"overtales" af tekst i en tidligere fases svar. Reviewer-fasen er en ren
+Python-syntese af de andre fasers `success`-felter, ikke en fortolkning af
+fri tekst. Der er ingen løkke mellem agenterne — forløbet har et fast antal
+faser og en klar afslutningsregel. Hver fase logges som sit eget MLflow-span
+under ét fælles `multi_agent_workflow`-span, så hele forløbet kan ses samlet
+eller fase for fase. Se [ADR-0015](adr/0015-multi-agent-workflow.md) og
+`docs/security.md` §11.
 
 ### MCP Server (`src/agentops/mcp_server/`)
 

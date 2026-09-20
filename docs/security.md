@@ -131,6 +131,64 @@ er et navn, der slås op i en serverkonfigureret allowlist
 (`agentops.api.repositories.allowed_repositories`) — i dag kun `"demo"` →
 det konfigurerede `AGENT_WORKSPACE_ROOT`. Se `tests/integration/test_api.py::test_unknown_repository_is_rejected`.
 
+### 9. Memory poisoning
+
+**Trussel:** en RIGTIG LLM bliver manipuleret af injiceret tekst i en fil,
+den læser, og ekko'er dele af det i sit `final_answer`. Uden en sanitizer
+kunne det blive gemt som en "tillid værdig" tidligere erfaring og påvirke en
+senere, urelateret opgave i samme workspace.
+
+**Mitigation:** memory-udtræk (`agentops.memory.extraction`) bygger
+UDELUKKENDE på allerede-strukturerede felter (`tools_used`,
+`files_changed`, `tests_passed/failed`) — aldrig rå `conversation_state`
+eller rå tool-result-tekst. Hver tekst, der bliver til en memory-post, køres
+desuden gennem `agentops.memory.sanitize`, som afviser og erstatter kendte
+injection-mønstre med en fast placeholder og markerer posten `flagged`.
+`MemoryStore.search` udelukker ALTID flagged rækker, fail-closed. Testet i
+`tests/security/test_memory_poisoning.py` og `tests/unit/test_memory.py`.
+Se [ADR-0013](adr/0013-agent-memory.md).
+
+### 10. Skill-instruktioner eller MCP-tool-beskrivelser som forsøg på at svække godkendelse
+
+**Trussel:** en skills instruktionstekst, eller en (kompromitteret)
+MCP-servers tool-beskrivelse, forsøger eksplicit at overtale modellen til at
+"springe godkendelse over" for en HIGH-risk handling.
+
+**Mitigation:** risikoklassificering (`agentops.agent.risk.risk_level_for`)
+læser UDELUKKENDE tool-NAVNET fra en fast dict — aldrig skill-indhold eller
+tool-beskrivelser. Skills og tool-beskrivelser er ren prompt-tekst til
+modellen; de har ingen kodesti ind i godkendelseslogikken. Et ukendt
+tool-navn (uanset hvor beroligende dets beskrivelse lyder) forbliver
+fail-closed HIGH. Testet med en deliberat ondsindet mock-skill i
+`tests/security/test_approval_bypass_attempts.py`.
+
+### 11. Cross-phase prompt injection i multi-agent-workflowet
+
+**Trussel:** en ondsindet/manipuleret Developer Agent-tekst (`final_answer`)
+forsøger at påvirke Test-, Security- eller Reviewer-fasens konklusion.
+
+**Mitigation:** Test-fasens opgavetekst er en FAST streng i kildekoden, ikke
+afledt af Developer-fasens output. Security-fasen er slet ikke et LLM-kald —
+den scanner den faktiske `git diff` deterministisk
+(`agentops.agent.security_scan`). Reviewer-fasens verdict er en ren
+Python-syntese af de andre fasers `success`-felter, ikke en LLM-fortolkning
+af fri tekst. Testet i `tests/security/test_multi_agent_injection_resistance.py`.
+Se [ADR-0015](adr/0015-multi-agent-workflow.md).
+
+### 12. Godkendelsesomgåelse via nye kørselsveje (tool discovery, checkpoint-pause)
+
+**Trussel:** dynamisk tool discovery eller det checkpoint-baserede
+pause/resume-forløb (`continue_task()`) introducerer en alternativ vej, der
+utilsigtet omgår HIGH-risk-godkendelseskravet.
+
+**Mitigation:** tool discovery filtrerer KUN, hvilke tool-SCHEMAS modellen
+ser — selve godkendelsestjekket i `_run_loop` kører uændret på de tool
+calls, modellen rent faktisk foretager. `continue_task()` (checkpoint-pause,
+ADR-0014) er en helt anden mekanisme end `resume()` (godkendelsesbeslutning,
+ADR-0005/0011) — støder en genoptaget kørsel på et HIGH-risk tool call,
+pauser den for godkendelse PRÆCIS som en frisk kørsel ville. Testet i
+`tests/security/test_approval_bypass_attempts.py`.
+
 ## Kendte, accepterede begrænsninger
 
 - Ingen automatiseret dependency-/container-scanning i CI.
