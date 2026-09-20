@@ -65,6 +65,12 @@ class TaskRecord(Base):
     total_latency_ms: Mapped[float] = mapped_column(default=0.0)
     mlflow_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    memory_hits: Mapped[int] = mapped_column(default=0)
+    skill_selected: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tools_available_count: Mapped[int] = mapped_column(default=0)
+    tools_discovered_count: Mapped[int] = mapped_column(default=0)
+    agent_handoffs: Mapped[int] = mapped_column(default=0)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -95,6 +101,26 @@ class ApprovalRecord(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     task: Mapped[TaskRecord] = relationship(back_populates="approvals")
+
+
+class AgentMemoryModel(Base):
+    """Én udtrukket erfaring — se `agentops.memory.schemas.MemoryRecord`.
+
+    Adskilt fra `TaskRecord`: memory overlever på tværs af opgaver (det er
+    hele pointen), og har sin egen livscyklus/søgeflade, uafhængig af én
+    bestemt opgaves status.
+    """
+
+    __tablename__ = "agent_memories"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    workspace_key: Mapped[str] = mapped_column(String(256), index=True)
+    category: Mapped[str] = mapped_column(String(32))
+    summary: Mapped[str] = mapped_column(Text)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    outcome: Mapped[str] = mapped_column(String(16), default="unknown")
+    flagged: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class EvaluationRunRecord(Base):

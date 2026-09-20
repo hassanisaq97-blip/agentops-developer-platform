@@ -14,6 +14,10 @@ class TaskStatus(StrEnum):
     AWAITING_APPROVAL = "awaiting_approval"
     FAILED = "failed"
     MAX_STEPS_REACHED = "max_steps_reached"
+    PAUSED = "paused"
+    """Checkpoint-baseret pause for langvarige opgaver (ADR-0014) — IKKE en
+    godkendelsespause. Genoptages via `AgentOrchestrator.continue_task()`, ikke
+    `resume()`, som er forbeholdt godkendelsesbeslutninger."""
 
 
 class PendingToolCall(BaseModel):
@@ -72,3 +76,14 @@ class AgentRunResult(BaseModel):
     provider: str | None = None
     model: str | None = None
     used_fallback: bool = False
+    memory_hits: int = 0
+    """Antal relevante tidligere erfaringer hentet ved opgavens start — 0 hvis memory er slået fra."""
+    skill_selected: str | None = None
+    """Navnet på den skill, der blev valgt til denne opgave — None hvis ingen matchede."""
+    tools_available_count: int = 0
+    """Antal tools MCP-serveren faktisk stillede til rådighed (før evt. discovery-filtrering)."""
+    tools_discovered_count: int = 0
+    """Antal tools der faktisk blev sendt til modellen — lig med tools_available_count,
+    medmindre dynamisk tool discovery er slået til."""
+    agent_handoffs: int = 0
+    """Antal overdragelser mellem agenter i et multi-agent workflow — 0 for en enkelt agent."""

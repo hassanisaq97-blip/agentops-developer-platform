@@ -19,12 +19,17 @@ from agentops.agent.risk import RiskLevel
 
 class AgentEventType(StrEnum):
     TASK_STARTED = "task_started"
+    MEMORY_RETRIEVED = "memory_retrieved"
+    SKILL_SELECTED = "skill_selected"
+    TOOLS_DISCOVERED = "tools_discovered"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
     TOOL_ERROR = "tool_error"
     APPROVAL_REQUIRED = "approval_required"
     APPROVAL_GRANTED = "approval_granted"
     APPROVAL_DENIED = "approval_denied"
+    CHECKPOINT_SAVED = "checkpoint_saved"
+    TASK_PAUSED = "task_paused"
     FINAL_ANSWER = "final_answer"
     MAX_STEPS_REACHED = "max_steps_reached"
 

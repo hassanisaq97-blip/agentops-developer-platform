@@ -7,6 +7,7 @@ at dele global state mellem testkørsler.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -16,9 +17,10 @@ from agentops.agent.mcp_client import MCPClient
 from agentops.agent.orchestrator import AgentOrchestrator
 from agentops.api.routers import evaluations, health, tasks, tools
 from agentops.gateway.factory import build_gateway
+from agentops.memory.integration import retrieve_memories, save_memories
 from agentops.observability.logging_config import configure_logging
 from agentops.observability.tracing import configure_mlflow
-from agentops.persistence import db
+from agentops.persistence import db, task_repository
 from agentops.settings import Settings, get_settings
 
 
@@ -32,10 +34,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         db.init_engine(settings)
         db.run_migrations(settings)
 
+        with db.session_scope() as session:
+            recovered = task_repository.recover_interrupted_tasks(session)
+        if recovered:
+            logging.getLogger(__name__).warning(
+                "recovered_interrupted_tasks", extra={"count": len(recovered)}
+            )
+
         gateway = build_gateway(settings)
         app.state.settings = settings
         app.state.gateway = gateway
-        app.state.orchestrator = AgentOrchestrator(gateway, settings)
+        app.state.orchestrator = AgentOrchestrator(
+            gateway,
+            settings,
+            memory_retriever=retrieve_memories if settings.agent_memory_enabled else None,
+            memory_saver=save_memories if settings.agent_memory_enabled else None,
+        )
 
         async with MCPClient(str(settings.workspace_root)) as client:
             app.state.tools_cache = await client.list_tool_definitions()

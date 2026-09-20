@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from agentops.persistence.db import Base  # noqa: E402
 from agentops.persistence.models import (  # noqa: E402, F401
+    AgentMemoryModel,
     ApprovalRecord,
     EvaluationRunRecord,
     TaskRecord,

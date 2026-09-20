@@ -48,6 +48,11 @@ def task_record_to_response(record: TaskRecord) -> TaskResponse:
         total_input_tokens=record.total_input_tokens,
         total_output_tokens=record.total_output_tokens,
         total_latency_ms=record.total_latency_ms,
+        memory_hits=record.memory_hits,
+        skill_selected=record.skill_selected,
+        tools_available_count=record.tools_available_count,
+        tools_discovered_count=record.tools_discovered_count,
+        agent_handoffs=record.agent_handoffs,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )

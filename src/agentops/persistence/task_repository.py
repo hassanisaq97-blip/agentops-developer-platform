@@ -65,6 +65,11 @@ def apply_agent_result(session: Session, record: TaskRecord, result: AgentRunRes
     record.total_input_tokens = result.total_usage.input_tokens
     record.total_output_tokens = result.total_usage.output_tokens
     record.total_latency_ms = result.total_latency_ms
+    record.memory_hits = result.memory_hits
+    record.skill_selected = result.skill_selected
+    record.tools_available_count = result.tools_available_count
+    record.tools_discovered_count = result.tools_discovered_count
+    record.agent_handoffs = result.agent_handoffs
 
     if result.pending_approval is not None:
         session.add(
@@ -115,3 +120,58 @@ def events_from_record(record: TaskRecord) -> list[AgentEvent]:
 
 def is_resumable(record: TaskRecord) -> bool:
     return record.status == TaskStatus.AWAITING_APPROVAL.value
+
+
+def is_continuable(record: TaskRecord) -> bool:
+    """En PAUSED opgave (checkpoint-baseret, se ADR-0014) — adskilt fra `is_resumable`,
+    som gælder en godkendelsesbeslutning."""
+    return record.status == TaskStatus.PAUSED.value
+
+
+def checkpoint_progress(
+    session: Session,
+    record: TaskRecord,
+    *,
+    conversation: list[Message],
+    events: list[AgentEvent],
+    input_tokens: int,
+    output_tokens: int,
+) -> None:
+    """Skriver løbende fremskridt UNDER en kørsel og committer det STRAKS — ikke kun
+    ved kørslens afslutning. Det er selve pointen: hvis processen dør midt i en lang
+    opgave, overlever det seneste checkpoint, og opgaven kan gendannes derfra (se
+    `recover_interrupted_tasks` og docs/adr/0014-long-running-agents.md)."""
+    record.conversation_state = [m.model_dump(mode="json") for m in conversation]
+    record.events_json = [e.model_dump(mode="json") for e in events]
+    record.total_input_tokens = input_tokens
+    record.total_output_tokens = output_tokens
+    session.flush()
+    session.commit()
+
+
+def recover_interrupted_tasks(session: Session) -> list[TaskRecord]:
+    """Køres ved API-opstart. En opgave, der stadig står som 'running', betyder at
+    processen blev lukket ned, mens den kørte — ingen ren afslutning nåede at skrive
+    et terminalt resultat. Vi GENOPTAGER ALDRIG automatisk (ville betyde ukontrollerede
+    LLM/tool-kald uden opsyn ved opstart); vi markerer den i stedet klart, så et
+    menneske/en efterfølgende kaldende kan vælge at fortsætte den eksplicit."""
+    stmt = select(TaskRecord).where(TaskRecord.status == "running")
+    affected = []
+    for record in session.scalars(stmt):
+        if record.conversation_state:
+            record.status = TaskStatus.PAUSED.value
+            record.warnings = [
+                *record.warnings,
+                "Gendannet efter uventet nedlukning af API'et — kan genoptages via "
+                "POST /tasks/{id}/continue.",
+            ]
+        else:
+            record.status = TaskStatus.FAILED.value
+            record.warnings = [
+                *record.warnings,
+                "Ingen checkpoint blev nået, før API'et lukkede ned uventet.",
+            ]
+        affected.append(record)
+    session.flush()
+    session.commit()
+    return affected

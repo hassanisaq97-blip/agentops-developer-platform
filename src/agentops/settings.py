@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     agent_max_tool_calls: int = 25
     agent_tool_timeout_seconds: float = 30.0
     agent_auto_approve_high_risk: bool = False
+    agent_dynamic_tool_discovery: bool = False
+    """Se agentops.agent.tool_discovery — off som default bevarer eksisterende adfærd."""
+    agent_memory_enabled: bool = False
+    """Slår persistent agent-memory til/fra for FastAPI-appen — se agentops.memory.
+    Off som default: eksisterende opførsel er uændret, indtil dette eksplicit slås til."""
+    agent_checkpoint_every_n_steps: int = 0
+    """0 = ingen automatisk pause (uændret adfærd). >0: opgaven pauses (PAUSED) efter
+    så mange trin pr. kald og skal genoptages via POST /tasks/{id}/continue — til
+    bevidst langvarige opgaver, der deles op i afgrænsede kørsler. Se ADR-0014."""
 
     # MCP server
     mcp_server_host: str = "127.0.0.1"

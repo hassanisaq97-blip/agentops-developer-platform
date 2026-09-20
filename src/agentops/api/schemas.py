@@ -64,6 +64,11 @@ class TaskResponse(BaseModel):
     total_input_tokens: int
     total_output_tokens: int
     total_latency_ms: float
+    memory_hits: int
+    skill_selected: str | None
+    tools_available_count: int
+    tools_discovered_count: int
+    agent_handoffs: int
     created_at: datetime
     updated_at: datetime
 

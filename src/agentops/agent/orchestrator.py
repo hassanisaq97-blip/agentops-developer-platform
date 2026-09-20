@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from agentops.agent.context import STRATEGIES_WITH_TOOLS, ContextStrategy, build_system_prompt
@@ -26,6 +27,8 @@ from agentops.agent.mcp_client import MCPClient, MCPToolError
 from agentops.agent.risk import requires_approval as risk_requires_approval
 from agentops.agent.risk import risk_level_for
 from agentops.agent.schemas import AgentRunResult, PendingApproval, PendingToolCall, TaskStatus
+from agentops.agent.skills import Skill, format_skill_for_prompt, select_skill
+from agentops.agent.tool_discovery import discover_relevant_tools
 from agentops.gateway.gateway import LLMGateway
 from agentops.gateway.schemas import (
     ChatRole,
@@ -35,6 +38,8 @@ from agentops.gateway.schemas import (
     TokenUsage,
     ToolDefinition,
 )
+from agentops.memory.prompting import format_memories_for_prompt
+from agentops.memory.schemas import MemoryRecord
 from agentops.observability.tracing import SpanType, mlflow
 from agentops.security.secrets import redact_mapping
 from agentops.settings import Settings
@@ -43,11 +48,32 @@ logger = logging.getLogger(__name__)
 
 _MAX_RESULT_CHARS_IN_CONTEXT = 4000
 
+MemoryRetriever = Callable[[str, str], Awaitable[list[MemoryRecord]]]
+"""(workspace_key, query_text) -> relevante tidligere erfaringer."""
+MemorySaver = Callable[[str, str, AgentRunResult], Awaitable[None]]
+"""(workspace_key, task_description, terminal_result) -> None. Kaldes KUN på et
+terminalt resultat (COMPLETED/FAILED/MAX_STEPS_REACHED) — aldrig på en pause,
+hvor opgaven endnu ikke er færdig."""
+OnCheckpoint = Callable[[list[Message], list[AgentEvent], TokenUsage], Awaitable[None]]
+"""Kaldes efter hver model-tur under en kørsel, så kaldende kode (API-laget) kan
+persistere fremskridt løbende — se ADR-0014 om checkpoints og recovery."""
+
+_TERMINAL_STATUSES = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.MAX_STEPS_REACHED}
+
 
 class AgentOrchestrator:
-    def __init__(self, gateway: LLMGateway, settings: Settings):
+    def __init__(
+        self,
+        gateway: LLMGateway,
+        settings: Settings,
+        *,
+        memory_retriever: MemoryRetriever | None = None,
+        memory_saver: MemorySaver | None = None,
+    ):
         self._gateway = gateway
         self._settings = settings
+        self._memory_retriever = memory_retriever
+        self._memory_saver = memory_saver
 
     async def run(
         self,
@@ -56,6 +82,8 @@ class AgentOrchestrator:
         *,
         context_strategy: ContextStrategy = ContextStrategy.TARGETED_MCP,
         complexity: TaskComplexity = TaskComplexity.SIMPLE,
+        on_checkpoint: OnCheckpoint | None = None,
+        max_continuous_steps: int | None = None,
     ) -> AgentRunResult:
         with mlflow.start_span(name="agent_run", span_type=SpanType.AGENT) as span:
             span.set_inputs(
@@ -66,8 +94,14 @@ class AgentOrchestrator:
                 }
             )
             result = await self._run(
-                task, workspace_root, context_strategy=context_strategy, complexity=complexity
+                task,
+                workspace_root,
+                context_strategy=context_strategy,
+                complexity=complexity,
+                on_checkpoint=on_checkpoint,
+                max_continuous_steps=max_continuous_steps,
             )
+            await self._maybe_save_memory(workspace_root, task, result)
             span.set_outputs(self._span_outputs(result))
             return result
 
@@ -78,25 +112,97 @@ class AgentOrchestrator:
         *,
         context_strategy: ContextStrategy,
         complexity: TaskComplexity,
+        on_checkpoint: OnCheckpoint | None = None,
+        max_continuous_steps: int | None = None,
     ) -> AgentRunResult:
+        skill = select_skill(task)
         system_prompt = build_system_prompt(context_strategy, workspace_root, task)
         conversation = [Message(role=ChatRole.USER, content=task)]
+        events: list[AgentEvent] = []
+
+        if skill is not None:
+            system_prompt = f"{system_prompt}\n\n{format_skill_for_prompt(skill)}"
+            events.append(
+                AgentEvent(
+                    step=len(events),
+                    type=AgentEventType.SKILL_SELECTED,
+                    result_summary=skill.name,
+                )
+            )
+
+        memories = await self._maybe_retrieve_memory(workspace_root, task)
+        if memories:
+            system_prompt = f"{system_prompt}\n\n{format_memories_for_prompt(memories)}"
+            events.append(
+                AgentEvent(
+                    step=len(events),
+                    type=AgentEventType.MEMORY_RETRIEVED,
+                    result_summary=f"{len(memories)} relevante tidligere erfaringer",
+                )
+            )
 
         if context_strategy not in STRATEGIES_WITH_TOOLS:
-            return await self._run_without_tools(task, system_prompt, conversation, complexity)
+            result = await self._run_without_tools(
+                task, system_prompt, conversation, complexity, prefix_events=events
+            )
+            result.skill_selected = skill.name if skill else None
+            result.memory_hits = len(memories)
+            return result
 
         async with MCPClient(str(workspace_root)) as mcp_client:
-            tools = await mcp_client.list_tool_definitions()
-            return await self._run_loop(
+            all_tools = await mcp_client.list_tool_definitions()
+            tools = self._select_tools(task, all_tools, skill)
+            if self._settings.agent_dynamic_tool_discovery:
+                events.append(
+                    AgentEvent(
+                        step=len(events),
+                        type=AgentEventType.TOOLS_DISCOVERED,
+                        result_summary=f"{len(tools)}/{len(all_tools)} tools",
+                        arguments={"discovered": [t.name for t in tools]},
+                    )
+                )
+            result = await self._run_loop(
                 task=task,
                 system_prompt=system_prompt,
                 conversation=conversation,
                 tools=tools,
                 mcp_client=mcp_client,
                 complexity=complexity,
-                events=[],
+                events=events,
                 approval_decision=None,
+                on_checkpoint=on_checkpoint,
+                max_continuous_steps=max_continuous_steps,
             )
+            result.skill_selected = skill.name if skill else None
+            result.memory_hits = len(memories)
+            result.tools_available_count = len(all_tools)
+            result.tools_discovered_count = len(tools)
+            return result
+
+    async def _maybe_retrieve_memory(self, workspace_root: Path, task: str) -> list[MemoryRecord]:
+        if self._memory_retriever is None:
+            return []
+        from agentops.memory.schemas import workspace_key_for
+
+        workspace_key = workspace_key_for(str(workspace_root))
+        return await self._memory_retriever(workspace_key, task)
+
+    async def _maybe_save_memory(
+        self, workspace_root: Path, task: str, result: AgentRunResult
+    ) -> None:
+        if self._memory_saver is None or result.status not in _TERMINAL_STATUSES:
+            return
+        from agentops.memory.schemas import workspace_key_for
+
+        workspace_key = workspace_key_for(str(workspace_root))
+        await self._memory_saver(workspace_key, task, result)
+
+    def _select_tools(
+        self, task: str, all_tools: list[ToolDefinition], skill: Skill | None
+    ) -> list[ToolDefinition]:
+        if not self._settings.agent_dynamic_tool_discovery:
+            return all_tools
+        return discover_relevant_tools(task, all_tools, skill)
 
     @staticmethod
     def _span_outputs(result: AgentRunResult) -> dict:
@@ -124,6 +230,8 @@ class AgentOrchestrator:
         context_strategy: ContextStrategy = ContextStrategy.TARGETED_MCP,
         complexity: TaskComplexity = TaskComplexity.SIMPLE,
         prior_events: list[AgentEvent] | None = None,
+        on_checkpoint: OnCheckpoint | None = None,
+        max_continuous_steps: int | None = None,
     ) -> AgentRunResult:
         with mlflow.start_span(name="agent_resume", span_type=SpanType.AGENT) as span:
             span.set_inputs(
@@ -142,7 +250,10 @@ class AgentOrchestrator:
                 context_strategy=context_strategy,
                 complexity=complexity,
                 prior_events=prior_events,
+                on_checkpoint=on_checkpoint,
+                max_continuous_steps=max_continuous_steps,
             )
+            await self._maybe_save_memory(workspace_root, task, result)
             span.set_outputs(self._span_outputs(result))
             return result
 
@@ -157,10 +268,16 @@ class AgentOrchestrator:
         context_strategy: ContextStrategy = ContextStrategy.TARGETED_MCP,
         complexity: TaskComplexity = TaskComplexity.SIMPLE,
         prior_events: list[AgentEvent] | None = None,
+        on_checkpoint: OnCheckpoint | None = None,
+        max_continuous_steps: int | None = None,
     ) -> AgentRunResult:
+        skill = select_skill(task)
         system_prompt = build_system_prompt(context_strategy, workspace_root, task)
+        if skill is not None:
+            system_prompt = f"{system_prompt}\n\n{format_skill_for_prompt(skill)}"
         async with MCPClient(str(workspace_root)) as mcp_client:
-            tools = await mcp_client.list_tool_definitions()
+            all_tools = await mcp_client.list_tool_definitions()
+            tools = self._select_tools(task, all_tools, skill)
             events = list(prior_events or [])
             conversation = list(conversation_state)
 
@@ -215,23 +332,76 @@ class AgentOrchestrator:
                 complexity=complexity,
                 events=events,
                 approval_decision=approved,
+                on_checkpoint=on_checkpoint,
+                max_continuous_steps=max_continuous_steps,
             )
 
+    async def continue_task(
+        self,
+        task: str,
+        workspace_root: Path,
+        conversation_state: list[Message],
+        *,
+        context_strategy: ContextStrategy = ContextStrategy.TARGETED_MCP,
+        complexity: TaskComplexity = TaskComplexity.SIMPLE,
+        prior_events: list[AgentEvent] | None = None,
+        on_checkpoint: OnCheckpoint | None = None,
+        max_continuous_steps: int | None = None,
+    ) -> AgentRunResult:
+        """Genoptager en PAUSED opgave (checkpoint-baseret) — IKKE en godkendelses-
+        beslutning, se `resume()` for det. Bruges til langvarige opgaver, der
+        bevidst er delt op i flere afgrænsede kørsler, og til recovery efter en
+        uventet API-nedlukning (se ADR-0014). Memory hentes IKKE igen her — det
+        sker kun ved opgavens allerførste `run()`-kald."""
+        with mlflow.start_span(name="agent_continue", span_type=SpanType.AGENT) as span:
+            span.set_inputs({"task": task})
+            skill = select_skill(task)
+            system_prompt = build_system_prompt(context_strategy, workspace_root, task)
+            if skill is not None:
+                system_prompt = f"{system_prompt}\n\n{format_skill_for_prompt(skill)}"
+
+            async with MCPClient(str(workspace_root)) as mcp_client:
+                all_tools = await mcp_client.list_tool_definitions()
+                tools = self._select_tools(task, all_tools, skill)
+                result = await self._run_loop(
+                    task=task,
+                    system_prompt=system_prompt,
+                    conversation=list(conversation_state),
+                    tools=tools,
+                    mcp_client=mcp_client,
+                    complexity=complexity,
+                    events=list(prior_events or []),
+                    approval_decision=None,
+                    on_checkpoint=on_checkpoint,
+                    max_continuous_steps=max_continuous_steps,
+                )
+            await self._maybe_save_memory(workspace_root, task, result)
+            span.set_outputs(self._span_outputs(result))
+            return result
+
     async def _run_without_tools(
-        self, task: str, system_prompt: str, conversation: list[Message], complexity: TaskComplexity
+        self,
+        task: str,
+        system_prompt: str,
+        conversation: list[Message],
+        complexity: TaskComplexity,
+        prefix_events: list[AgentEvent] | None = None,
     ) -> AgentRunResult:
         request = CompletionRequest(
             messages=conversation, system=system_prompt, complexity=complexity
         )
         result = self._gateway.complete(request)
         events = [
+            *(prefix_events or []),
             AgentEvent(
-                step=0,
+                step=len(prefix_events or []),
                 type=AgentEventType.TASK_STARTED,
                 rationale="Ingen tools tilgængelige i denne context-strategi.",
             ),
             AgentEvent(
-                step=1, type=AgentEventType.FINAL_ANSWER, result_summary=result.message.content
+                step=len(prefix_events or []) + 1,
+                type=AgentEventType.FINAL_ANSWER,
+                result_summary=result.message.content,
             ),
         ]
         return AgentRunResult(
@@ -261,6 +431,8 @@ class AgentOrchestrator:
         complexity: TaskComplexity,
         events: list[AgentEvent],
         approval_decision: bool | None,
+        on_checkpoint: OnCheckpoint | None = None,
+        max_continuous_steps: int | None = None,
     ) -> AgentRunResult:
         max_steps = self._settings.agent_max_tool_calls
         total_usage = TokenUsage()
@@ -269,14 +441,40 @@ class AgentOrchestrator:
         model: str | None = None
         used_fallback = False
         step = len(events)
+        steps_this_call = 0
 
-        if step == 0:
+        if not any(e.type == AgentEventType.TASK_STARTED for e in events):
             events.append(
                 AgentEvent(step=step, type=AgentEventType.TASK_STARTED, result_summary=task)
             )
             step += 1
 
         while step < max_steps:
+            if max_continuous_steps is not None and steps_this_call >= max_continuous_steps:
+                events.append(
+                    AgentEvent(
+                        step=step,
+                        type=AgentEventType.TASK_PAUSED,
+                        result_summary=(
+                            f"Pause efter {steps_this_call} trin i denne kørsel — "
+                            "genoptages via continue_task()."
+                        ),
+                    )
+                )
+                return self._finalize(
+                    TaskStatus.PAUSED,
+                    task,
+                    None,
+                    conversation,
+                    events,
+                    total_usage,
+                    total_latency_ms,
+                    provider,
+                    model,
+                    used_fallback,
+                    None,
+                )
+
             request = CompletionRequest(
                 messages=conversation, tools=tools, system=system_prompt, complexity=complexity
             )
@@ -292,6 +490,7 @@ class AgentOrchestrator:
                 used_fallback or result.used_fallback,
             )
             conversation.append(result.message)
+            steps_this_call += 1
 
             if not result.message.tool_calls:
                 events.append(
@@ -386,6 +585,9 @@ class AgentOrchestrator:
                 )
                 conversation.append(observation)
                 step += 1
+
+            if on_checkpoint is not None:
+                await on_checkpoint(conversation, events, total_usage)
 
         events.append(AgentEvent(step=step, type=AgentEventType.MAX_STEPS_REACHED))
         return self._finalize(
