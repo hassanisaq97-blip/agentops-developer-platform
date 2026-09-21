@@ -1,59 +1,25 @@
 # AgentOps Developer Platform
 
-En observerbar og evaluerbar AI-platform til agent-assisteret
-softwareudvikling: en coding agent, der løser softwareopgaver ved at
-undersøge og ændre et repository gennem en rigtig MCP-server — med
-kontrolleret context, human-in-the-loop-godkendelse af risikable handlinger,
-MLflow-tracing og et reproducerbart evalueringsframework.
+En AI-platform til sikker og målbar agent-assisteret softwareudvikling. Platformen kombinerer coding agents, MCP-værktøjer, human-in-the-loop-godkendelse, MLflow-tracing og reproducerbare evalueringer i ét samlet workflow.
 
 ## Hvorfor projektet eksisterer
 
-Coding agents kan være effektive, men enterprise-brug kræver mere end en
-model, der kan skrive kode: kontrolleret context (ikke hele repoet i
-prompten), afgrænset tool-adgang, observability på tværs af agent-kørsler,
-et evalueringsframework der måler faktisk succes frem for antagelser, og
-sikker integration i en softwareudviklingsproces med menneskelig kontrol
-over risikable handlinger. Dette projekt bygger den infrastruktur.
+Coding agents bliver først praktisk anvendelige i en organisation, når adgang, sikkerhed, kvalitet og drift kan styres. Projektet demonstrerer infrastrukturen omkring agenten: afgrænset kontekst og værktøjsadgang, menneskelig godkendelse af risikable handlinger, tracing og objektiv evaluering.
 
 ## Centrale funktioner
 
-- **Coding agent orchestrator** med en agentisk løkke, strukturerede
-  (ikke skjulte) beslutninger, og fire eksplicitte context-strategier.
-- **Rigtig MCP-server** (officiel `mcp` Python SDK) med ni developer tools,
-  sandboxed til ét repository, path traversal-beskyttet, med en command
-  allowlist — ingen generisk shell-adgang.
-- **Provider-uafhængig LLM Gateway**: Anthropic, OpenAI, og en deterministisk
-  test-provider (kører uden API-nøgle), med routing og retries. Fallback ved
-  et RIGTIGT providerudfald går kun til en anden konfigureret rigtig
-  provider, aldrig til test-provideren — se [ADR-0012](docs/adr/0012-gateway-fallback-adskillelse.md).
-- **Human-in-the-loop-godkendelse**: højrisiko tool-kald (fil-ændringer)
-  pauser agenten og kræver eksplicit godkendelse via API'et.
-- **Persistent agent-memory** (off by default): udtrukne, sanitiserede
-  resuméer fra tidligere opgaver — aldrig rå samtaler — scoped pr. workspace,
-  med indbygget forsvar mod at gemme prompt-injection-forsøg som tillid
-  værdig erfaring. Se [ADR-0013](docs/adr/0013-agent-memory.md).
-- **Skills** (debugging, security review, test generation,
-  database/migration review, API review): en billig, deterministisk
-  keyword-klassificering vælger den relevante skill FØR noget LLM-kald —
-  agenten ser aldrig alle skill-instruktioner på én gang.
-- **Dynamisk MCP tool discovery** (off by default): sender kun de tools til
-  modellen, den valgte skill faktisk anbefaler, i stedet for altid alle ni —
-  målt til at reducere både tool calls og tokens uden at ændre resultatet.
-- **Checkpoint-baserede langvarige opgaver**: fremskridt gemmes og
-  committes løbende under en kørsel, en opgave kan bevidst sættes på pause
-  og genoptages senere, og en uventet API-nedlukning gendannes sikkert (aldrig
-  ved at genoptage LLM-kald automatisk) — se [ADR-0014](docs/adr/0014-skills-tool-discovery-long-running.md).
-- **Kontrolleret multi-agent workflow** (Developer → Test → Security →
-  Reviewer): en fast, ikke-cyklisk pipeline bygget oven på den samme
-  orchestrator — Security-fasen er en ægte deterministisk statisk scanning,
-  ikke et LLM-kald der ikke kan verificeres. Se [ADR-0015](docs/adr/0015-multi-agent-workflow.md).
-- **MLflow-tracing** af hele kæden: agent-kørsel → LLM-kald → tool-kald →
-  memory → multi-agent-faser, som nestede spans i ét samlet trace.
-- **Reproducerbart evalueringsframework** med deterministiske
-  success-kriterier — ikke en models egen selvvurdering.
-- **PostgreSQL + Alembic-migrations**, Docker/Docker Compose, GitHub Actions
-  CI med et separat "AI Quality Gate", og statisk validerede
-  Kubernetes/Terraform-konfigurationer.
+- **Coding agent** der undersøger kode, bruger værktøjer, foreslår ændringer og validerer resultatet i et kontrolleret agent-loop.
+- **MCP-server** bygget med det officielle Python SDK. Ni udviklerværktøjer giver agenten kontrolleret adgang til ét repository uden generisk shell-adgang.
+- **Provider-uafhængig LLM Gateway** med Anthropic, OpenAI og en deterministisk test-provider. Gatewayen håndterer routing, retries og kontrolleret fallback mellem konfigurerede produktionsprovidere. Se [ADR-0012](docs/adr/0012-gateway-fallback-adskillelse.md).
+- **Human-in-the-loop**: risikable handlinger, fx filændringer, sættes på pause og kræver eksplicit godkendelse via API'et.
+- **Persistent agent-memory** (deaktiveret som standard) gemmer korte, rensede erfaringer fra tidligere opgaver pr. workspace. Mistænkeligt indhold filtreres for at reducere risikoen for memory poisoning. Se [ADR-0013](docs/adr/0013-agent-memory.md).
+- **Agent Skills** til debugging, security review, test generation, database/migration review og API review. Den relevante skill vælges før LLM-kaldet, så modellen kun får de instruktioner, den har brug for.
+- **Dynamisk MCP tool discovery** (deaktiveret som standard) begrænser modellens kontekst til de værktøjer, der er relevante for den valgte opgave. I de målte testcases reducerede det tool calls og tokenforbrug uden at ændre resultatet.
+- **Langvarige opgaver med checkpoints**: status gemmes løbende, så opgaver kan pauses, genoptages og gendannes sikkert efter en afbrydelse. Se [ADR-0014](docs/adr/0014-skills-tool-discovery-long-running.md).
+- **Kontrolleret multi-agent workflow**: Developer → Test → Security → Reviewer. Hver fase har et tydeligt ansvar, og workflowet kan ikke køre i en uendelig agent-loop. Security-fasen bruger deterministisk statisk scanning. Se [ADR-0015](docs/adr/0015-multi-agent-workflow.md).
+- **MLflow-tracing** samler agent-kørsel, LLM-kald, tool calls, memory og multi-agent-faser i ét trace, så forløbet kan undersøges efterfølgende.
+- **Reproducerbare evals** måler agentens faktiske adfærd og resultat ud fra faste kriterier frem for modellens egen vurdering.
+- **Platform og drift** med PostgreSQL, Alembic, Docker Compose, GitHub Actions, AI Quality Gate samt Kubernetes- og Terraform-konfigurationer.
 
 ## Arkitektur
 
@@ -79,7 +45,7 @@ flowchart TB
 
 Fuld arkitekturdokumentation: [`docs/architecture.md`](docs/architecture.md).
 
-## Ende-til-ende-demoflow
+## Demo: fra opgave til valideret ændring
 
 ```mermaid
 sequenceDiagram
@@ -107,17 +73,11 @@ sequenceDiagram
     O-->>U: Resultat + trace-link
 ```
 
-Kør selv: `python scripts/run_demo.py` (ingen API-nøgle nødvendig — se
-"Quick start"). For at prøve det samme forløb direkte fra Claude Code (ikke
-via API'et) — se [MCP direkte i Claude Code](#mcp-direkte-i-claude-code)
-nedenfor.
+Kør demoen med `python scripts/run_demo.py` uden API-nøgle. Direkte brug fra Claude Code er beskrevet under [MCP direkte i Claude Code](#mcp-direkte-i-claude-code).
 
 ## MCP direkte i Claude Code
 
-Dette repository har et checket-ind [`.mcp.json`](.mcp.json): åbner du
-repositoryet i Claude Code, forbinder det automatisk til
-`agentops-developer-tools` MCP-serveren, klar til at bruges mod en
-git-initialiseret kopi af `demo_repo/`:
+Repositoryets [`.mcp.json`](.mcp.json) konfigurerer `agentops-developer-tools` automatisk i Claude Code. Demoen arbejder mod en isoleret, git-initialiseret kopi af `demo_repo/`:
 
 ```bash
 uv venv && uv pip install -e . --group dev
@@ -125,13 +85,7 @@ python scripts/prepare_mcp_demo_workspace.py   # klargør/nulstil demo-workspace
 claude                                          # åbn Claude Code her
 ```
 
-Her er det Claude Code's egen indbyggede tool-godkendelses-UI, der udgør
-menneske-i-loopet for `apply_patch`/`edit_file` — et andet, men lige så reelt,
-godkendelseslag end platformens interne `PendingApproval` (som kun er aktivt,
-når AgentOps' egen orchestrator kører løkken via API'et). Path
-traversal-beskyttelse og command allowlisting gælder uændret, uanset hvilken
-klient der forbinder. Detaljer og en trin-for-trin-gennemgang:
-[`docs/mcp.md`](docs/mcp.md).
+Når Claude Code er MCP-klient, håndteres godkendelse af filændringer af Claude Codes egen permission-UI. Platformens interne `PendingApproval` bruges, når AgentOps-orchestratoren kører via API'et. Sandbox- og kommando-begrænsninger gælder i begge tilfælde. Se [`docs/mcp.md`](docs/mcp.md).
 
 ## Evaluering
 
@@ -219,11 +173,9 @@ gennem én sandbox-klasse, og højrisiko-handlinger kræver menneskelig
 godkendelse som standard. Fuld trusselsmodel, mitigations og kendte
 begrænsninger: [`docs/security.md`](docs/security.md).
 
-## Eksperimenter og lessons learned
+## Eksperimenter og erfaringer
 
-Faktisk målte forskelle mellem context-strategier, og en ærlig gennemgang af
-hvad der ikke virkede første gang under udviklingen:
-[`docs/experiments/lessons-learned.md`](docs/experiments/lessons-learned.md).
+Målte forskelle mellem context-strategier samt fejl og designvalg fra udviklingen er dokumenteret i [`docs/experiments/lessons-learned.md`](docs/experiments/lessons-learned.md).
 
 ## Kendte begrænsninger
 
