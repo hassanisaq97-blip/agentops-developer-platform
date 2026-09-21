@@ -1,212 +1,321 @@
 # AgentOps Developer Platform
 
-En AI-platform til sikker og målbar agent-assisteret softwareudvikling. Platformen kombinerer coding agents, MCP-værktøjer, human-in-the-loop-godkendelse, MLflow-tracing og reproducerbare evalueringer i ét samlet workflow.
+En AI-platform til agent-assisteret softwareudvikling, bygget som et praktisk eksperiment i, hvordan coding agents kan arbejde sikkert, målbart og kontrolleret med rigtig kode.
 
-## Hvorfor projektet eksisterer
+Platformen kan modtage en softwareopgave, undersøge et repository, finde relevante filer, køre tests, foreslå kodeændringer og validere resultatet. Risikable handlinger kan kræve menneskelig godkendelse, og hele forløbet kan spores og evalueres.
 
-Coding agents bliver først praktisk anvendelige i en organisation, når adgang, sikkerhed, kvalitet og drift kan styres. Projektet demonstrerer infrastrukturen omkring agenten: afgrænset kontekst og værktøjsadgang, menneskelig godkendelse af risikable handlinger, tracing og objektiv evaluering.
+> **Eksempel:** “Find årsagen til den fejlende test, ret problemet og kontrollér, at løsningen virker.”
 
-## Centrale funktioner
+Systemet kan herefter undersøge koden via MCP, køre tests, foreslå en patch, vente på godkendelse, udføre ændringen og kontrollere resultatet.
 
-- **Coding agent** der undersøger kode, bruger værktøjer, foreslår ændringer og validerer resultatet i et kontrolleret agent-loop.
-- **MCP-server** bygget med det officielle Python SDK. 9 udviklerværktøjer giver agenten kontrolleret adgang til ét repository uden generisk shell-adgang.
-- **Provider-uafhængig LLM Gateway** med Anthropic, OpenAI og en deterministisk test-provider. Gatewayen håndterer routing, retries og kontrolleret fallback mellem konfigurerede produktionsprovidere. Se [ADR-0012](docs/adr/0012-gateway-fallback-adskillelse.md).
-- **Human-in-the-loop**: risikable handlinger, fx filændringer, sættes på pause og kræver eksplicit godkendelse via API'et.
-- **Persistent agent-memory** (deaktiveret som standard) gemmer korte, rensede erfaringer fra tidligere opgaver pr. workspace. Mistænkeligt indhold filtreres for at reducere risikoen for memory poisoning. Se [ADR-0013](docs/adr/0013-agent-memory.md).
-- **Agent Skills** til debugging, security review, test generation, database/migration review og API review. Den relevante skill vælges før LLM-kaldet, så modellen kun får de instruktioner, den har brug for.
-- **Dynamisk MCP tool discovery** (deaktiveret som standard) begrænser modellens kontekst til de værktøjer, der er relevante for den valgte opgave. I de målte testcases reducerede det tool calls og tokenforbrug uden at ændre resultatet.
-- **Langvarige opgaver med checkpoints**: status gemmes løbende, så opgaver kan pauses, genoptages og gendannes sikkert efter en afbrydelse. Se [ADR-0014](docs/adr/0014-skills-tool-discovery-long-running.md).
-- **Kontrolleret multi-agent workflow**: Developer → Test → Security → Reviewer. Hver fase har et tydeligt ansvar, og workflowet kan ikke køre i en uendelig agent-loop. Security-fasen bruger deterministisk statisk scanning. Se [ADR-0015](docs/adr/0015-multi-agent-workflow.md).
-- **MLflow-tracing** samler agent-kørsel, LLM-kald, tool calls, memory og multi-agent-faser i ét trace, så forløbet kan undersøges efterfølgende.
-- **Reproducerbare evals** måler agentens faktiske adfærd og resultat ud fra faste kriterier frem for modellens egen vurdering.
-- **Platform og drift** med PostgreSQL, Alembic, Docker Compose, GitHub Actions, AI Quality Gate samt Kubernetes- og Terraform-konfigurationer.
+## Hvad har jeg bygget?
+
+Projektet samler de vigtigste dele omkring en moderne AI-agent i én platform:
+
+- en **coding agent**, der kan undersøge og arbejde med et repository
+- et kontrolleret workflow med **Developer → Test → Security → Reviewer**
+- **9 MCP-værktøjer** til bl.a. kode- og filsøgning, Git-inspektion og testkørsel
+- **5 specialiserede skills** til debugging, security review, test generation, database/migration review og API review
+- **agent-memory**, der kan genbruge relevante erfaringer fra tidligere opgaver
+- **dynamisk tool discovery**, så modellen kun får relevante værktøjer
+- **human-in-the-loop**, så risikable kodeændringer kan kræve godkendelse
+- **checkpoints og pause/resume** til længerevarende opgaver
+- en **LLM Gateway**, så platformen kan arbejde med Anthropic, OpenAI eller en lokal test-provider
+- **MLflow-tracing**, så agentens forløb, LLM-kald og tool calls kan undersøges
+- et **evalueringsframework**, der måler agentens faktiske adfærd og resultat
+- **184 automatiserede tests** og **14 evalueringscases**
+
+## Sådan arbejder systemet
+
+Et typisk forløb ser sådan ud:
+
+```text
+Softwareopgave
+      ↓
+Memory: findes der relevante erfaringer fra tidligere?
+      ↓
+Skill selection: hvilken type opgave er det?
+      ↓
+Tool discovery: hvilke MCP-værktøjer er nødvendige?
+      ↓
+Developer: undersøg kode og foreslå/lav ændringen
+      ↓
+Human approval ved risikable handlinger
+      ↓
+Test: kontrollér at løsningen virker
+      ↓
+Security: scan ændringen for definerede sikkerhedsproblemer
+      ↓
+Reviewer: saml resultatet og giv en endelig status
+      ↓
+Resultat + trace + evalueringsdata
+```
+
+Det centrale i projektet er derfor ikke kun, at en LLM kan skrive kode. Platformen styrer **hvilken kontekst agenten får, hvilke værktøjer den må bruge, hvornår et menneske skal godkende en handling, hvordan forløbet spores, og hvordan resultatet evalueres**.
+
+## Developer, Test, Security og Reviewer
+
+Workflowet er bevidst fast og ikke-cyklisk, så komponenterne ikke kan fortsætte i en uendelig samtale.
+
+### Developer
+
+Developer-fasen bruger agent-orchestratoren til at undersøge opgaven, læse relevant kode, bruge MCP-værktøjer og foreslå eller udføre ændringer. Højrisiko-handlinger kan sætte workflowet på pause, indtil et menneske godkender eller afviser dem.
+
+### Test
+
+Test-fasen kontrollerer ændringen uafhængigt og genkører relevante tests. Den har mere begrænsede rettigheder end Developer-fasen og får ikke adgang til filændringsværktøjer.
+
+### Security
+
+Security-fasen er ikke et LLM-kald. Den bruger en deterministisk statisk scanning af Git-diffet til at finde definerede risikomønstre som fx `eval/exec`, `os.system`, `shell=True`, hardcodede secrets og path-traversal-mønstre.
+
+### Reviewer
+
+Reviewer-fasen samler de verificerbare resultater fra de øvrige faser og returnerer en struktureret status. Den er implementeret programmatisk frem for som endnu et LLM-kald, så resultatet kan reproduceres og testes.
+
+Se designet i [ADR-0015](docs/adr/0015-multi-agent-workflow.md).
+
+## MCP: agentens værktøjskasse
+
+Platformen har sin egen MCP-server bygget med det officielle `mcp` Python SDK. Den giver agenten kontrollerede værktøjer til at arbejde med et repository, bl.a. til at:
+
+- søge i kode
+- læse filer
+- inspicere repository og Git-status
+- se Git-diffs
+- hente projektdokumentation
+- køre tests
+- foreslå eller udføre kontrollerede filændringer
+
+MCP-serveren er sandboxed til ét workspace. Path traversal og symlink escape blokeres, kommandoer styres af en allowlist, og der findes ingen generisk shell-adgang.
+
+Repositoryets [`.mcp.json`](.mcp.json) gør det også muligt at bruge MCP-serveren direkte fra Claude Code. Se [docs/mcp.md](docs/mcp.md).
+
+## Skills og dynamisk tool discovery
+
+Agenten har fem indbyggede skills:
+
+- **Debugging**
+- **Security review**
+- **Test generation**
+- **Database/migration review**
+- **API review**
+
+En deterministisk klassificering vælger den relevante skill før LLM-kaldet. Agenten får derfor kun de instruktioner, der passer til opgaven.
+
+Med dynamisk tool discovery kan platformen samtidig begrænse de MCP-tools, der sendes til modellen. En API-review-opgave behøver eksempelvis ikke nødvendigvis samme værktøjer som en debugging-opgave.
+
+I de gennemførte deterministiske eksperimenter reducerede tool discovery i relevante cases antallet af tool calls fra **2 til 1** og reducerede tokenforbruget, uden at det målte resultat ændrede sig.
+
+## Memory og længerevarende opgaver
+
+Agent-memory kan gemme korte, rensede erfaringer fra afsluttede opgaver og hente dem igen, når de er relevante for en ny opgave. Rå samtaler og komplette tool outputs gemmes ikke som memory.
+
+Der er desuden beskyttelse mod kendte prompt-injection-mønstre, så mistænkeligt indhold ikke uden videre bliver gemt som betroet erfaring.
+
+I det gennemførte memory-eksperiment steg `memory_hits` fra **0 til 3** på anden kørsel af samme type opgave. Test-providerens adfærd ændrede sig ikke, fordi den ikke fortolker promptindhold som en rigtig LLM. Eksperimentet dokumenterer derfor memory-mekanismen, ikke en påstået forbedring af modelkvaliteten.
+
+Længerevarende opgaver understøtter checkpoints, pause og genoptagelse. State gemmes, så en opgave ikke nødvendigvis skal begynde forfra efter en afbrydelse.
+
+Se [ADR-0013](docs/adr/0013-agent-memory.md) og [ADR-0014](docs/adr/0014-skills-tool-discovery-long-running.md).
+
+## LLM Gateway
+
+Agenten er ikke koblet direkte til én bestemt modelleverandør.
+
+LLM Gatewayen understøtter:
+
+- Anthropic
+- OpenAI
+- en deterministisk test-provider til automatiserede tests uden API-nøgle
+
+Gatewayen håndterer routing, retries og kontrolleret fallback. Hvis en rigtig provider fejler, falder systemet kun tilbage til en anden konfigureret rigtig provider — aldrig automatisk til test-provideren.
+
+Det gør arkitekturen lettere at udvide med andre modeller eller en self-hosted model.
+
+Se [ADR-0012](docs/adr/0012-gateway-fallback-adskillelse.md).
+
+## Human-in-the-loop og sikkerhed
+
+AI-agenten får ikke fri adgang til systemet.
+
+Risikable handlinger som filændringer klassificeres og kan sætte agenten på pause, indtil et menneske godkender eller afviser handlingen. Ukendte tools behandles fail-closed som høj risiko.
+
+Projektet indeholder også tests mod bl.a.:
+
+- path traversal og symlink escape
+- prompt injection via filindhold
+- poisoned memory
+- manipulerende skill- og tool-beskrivelser
+- forsøg på at omgå approval i dynamisk tool discovery
+- cross-phase injection i multi-agent workflowet
+- approval bypass efter pause/resume
+
+Den fulde trusselsmodel findes i [docs/security.md](docs/security.md).
+
+## Observability med MLflow
+
+MLflow bruges til at trace hele agentforløbet.
+
+Et trace kan bl.a. vise:
+
+```text
+Agent run
+  ├─ LLM call
+  ├─ MCP tool call
+  ├─ Memory retrieval
+  ├─ Developer phase
+  ├─ Test phase
+  └─ Security / review
+```
+
+Det gør det muligt at undersøge, hvad agenten gjorde, hvilke tools der blev brugt, og hvor i workflowet noget eventuelt gik galt.
+
+## Evals: virker agenten faktisk?
+
+Projektet har et reproducerbart evalueringsframework, der vurderer agentens faktiske adfærd frem for at bede modellen bedømme sig selv.
+
+Den aktuelle suite indeholder **14 evalueringscases** og måler bl.a.:
+
+- task success
+- om tests består
+- antal tool calls
+- tokenforbrug
+- memory hits
+- korrekt skill selection
+- antal tilgængelige og valgte tools
+- unødvendige filændringer
+- approval violations
+- security findings
+- agent handoffs
+- om agenten tog en unødvendigt lang vej
+
+Der er kørt konkrete sammenligninger af:
+
+**uden memory vs. med memory**  
+**alle tools vs. dynamisk tool discovery**  
+**single-agent vs. multi-agent**
+
+Med den deterministiske test-provider er det senest registrerede resultat **5/14 cases (36 %)** med **100 % match mellem målte og på forhånd dokumenterede forventninger**. Den lave success rate er forventet: test-provideren er med vilje simpel og kan kun løse bestemte kendte mønstre.
+
+**Real-LLM-evalueringer med Anthropic/OpenAI er endnu ikke kørt.** Workflowet [`.github/workflows/evals-llm.yml`](.github/workflows/evals-llm.yml) er klargjort til en rigtig Anthropic-kørsel med repository secret.
+
+Resultater og begrænsninger er dokumenteret i [docs/experiments/lessons-learned.md](docs/experiments/lessons-learned.md).
 
 ## Arkitektur
 
 ```mermaid
 flowchart TB
-    Dev([Udvikler]) --> API[FastAPI]
+    User([Udvikler]) --> API[FastAPI]
     API --> Memory[Agent Memory]
     Memory --> Skills[Skill Selection]
     Skills --> Discovery[Dynamic Tool Discovery]
-    Discovery --> Orch[Agent Orchestrator / Long-running Tasks]
-    Orch --> MultiAgent[Multi-Agent Workflow: Dev → Test → Security → Reviewer]
+    Discovery --> Orch[Agent Orchestrator]
     Orch --> Gateway[LLM Gateway]
     Gateway --> Anthropic[Anthropic]
     Gateway --> OpenAI[OpenAI]
-    Gateway --> TestProvider[Deterministic Test Provider]
-    Orch -- "stdio, spawnet subprocess" --> MCP[MCP Server]
-    MCP --> Sandbox[WorkspaceSandbox] --> Repo[(Target-repository)]
+    Orch --> MCP[MCP Server]
+    MCP --> Sandbox[Workspace Sandbox]
+    Sandbox --> Repo[(Repository)]
+    Orch --> Approval{{Human Approval}}
+    Orch --> Workflow[Developer → Test → Security → Reviewer]
+    Orch -. traces .-> MLflow[(MLflow)]
     API --> DB[(PostgreSQL)]
-    Orch -.trace.-> MLflow[(MLflow)]
-    Orch --> Approval{{Human-in-the-loop godkendelse}}
     Orch --> Evals[Evaluation Framework]
 ```
 
-Fuld arkitekturdokumentation: [`docs/architecture.md`](docs/architecture.md).
+Fuld arkitekturdokumentation: [docs/architecture.md](docs/architecture.md).
 
-## Demo: fra opgave til valideret ændring
+## Teknologier
 
-```mermaid
-sequenceDiagram
-    participant U as Udvikler
-    participant O as Agent Orchestrator
-    participant G as LLM Gateway
-    participant M as MCP Server
-    participant R as Repository
-    participant T as MLflow
+**AI og agents:** Python · Anthropic SDK · OpenAI SDK · MCP · agent orchestration · skills · memory · evals
 
-    U->>O: Opgave ("Find og ret den fejlende test")
-    O->>G: CompletionRequest (system prompt + tools)
-    G->>M: search_code / read_file (LAV risiko)
-    M->>R: Sandboxed opslag
-    R-->>G: Fund + fil-indhold
-    G->>M: run_tests (MIDDEL risiko)
-    M-->>G: Fejlende test identificeret
-    G-->>O: Foreslået patch (apply_patch — HØJ risiko)
-    O->>U: Afventer menneskelig godkendelse
-    U-->>O: Godkendt
-    O->>M: apply_patch udføres
-    O->>M: run_tests igen
-    M-->>O: Alle tests består
-    O->>T: Fuld trace (agent → LLM-kald → tool-kald)
-    O-->>U: Resultat + trace-link
-```
+**Backend og data:** FastAPI · Pydantic · SQLAlchemy · PostgreSQL · Alembic
 
-Kør demoen med `python scripts/run_demo.py` uden API-nøgle. Direkte brug fra Claude Code er beskrevet under [MCP direkte i Claude Code](#mcp-direkte-i-claude-code).
+**Observability og kvalitet:** MLflow · pytest · structlog · GitHub Actions · AI Quality Gate
 
-## MCP direkte i Claude Code
-
-Repositoryets [`.mcp.json`](.mcp.json) konfigurerer `agentops-developer-tools` automatisk i Claude Code. Demoen arbejder mod en isoleret, git-initialiseret kopi af `demo_repo/`:
-
-```bash
-uv venv && uv pip install -e . --group dev
-python scripts/prepare_mcp_demo_workspace.py   # klargør/nulstil demo-workspacet
-claude                                          # åbn Claude Code her
-```
-
-Når Claude Code er MCP-klient, håndteres godkendelse af filændringer af Claude Codes egen permission-UI. Platformens interne `PendingApproval` bruges, når AgentOps-orchestratoren kører via API'et. Sandbox- og kommando-begrænsninger gælder i begge tilfælde. Se [`docs/mcp.md`](docs/mcp.md).
-
-## Evaluering
-
-Kørt med den indbyggede deterministiske test-provider (ingen API-nøgle
-nødvendig): **success rate 36 % (5/14 cases)**, med **100 % match** mod den
-dokumenterede forventning for hver case — se
-[`docs/experiments/lessons-learned.md`](docs/experiments/lessons-learned.md)
-for det fulde resultat og hvorfor tallet er meningsfuldt (flere cases er
-bevidst designet til at ligge uden for den deterministiske providers
-rækkevidde — den genkender kun ét bug-mønster og reagerer aldrig på
-fritekst, hverken i opgaven eller i fil-indhold). Suiten dækker bug fixing,
-validering, refaktorering, repository-navigation, unødvendige
-filændringer, korrekt skill-selection, og to adversarial cases
-(unsafe-change-modstand og prompt injection via fil-indhold — se
-[`SuccessCriterion.HIGH_RISK_ACTIONS_WERE_GATED`](src/agentops/evaluation/schemas.py)).
-Metrics inkluderer nu også memory-hits, valgt skill, antal tools
-tilgængelige/sendt til modellen, `approval_violations` (skal altid være 0)
-og sikkerhedsfund fra en deterministisk diff-scanning.
-
-Tre faktiske sammenligninger (uden vs. med memory, alle tools vs. dynamisk
-discovery, single vs. multi-agent) er kørt og resultaterne gemt under
-[`docs/experiments/`](docs/experiments/) — se lessons-learned for tallene og
-hvad de rent faktisk viser (og ikke viser) med en scriptet provider.
-
-**Real-LLM-evalueringer (Anthropic/OpenAI) er IKKE kørt** i dette miljø —
-`.github/workflows/evals-llm.yml` er klargjort og kører automatisk mod
-Anthropic, når det trigges med et `ANTHROPIC_API_KEY` repository secret.
-
-## Tech stack
-
-Python 3.12 · FastAPI · Pydantic · SQLAlchemy + Alembic · PostgreSQL ·
-officiel `mcp` Python SDK · Anthropic- og OpenAI-SDK · MLflow Tracing ·
-structlog · pytest · Docker/Docker Compose · GitHub Actions · Terraform
-(azurerm) · Kubernetes-manifests (statisk valideret).
+**Platform og deployment:** Docker · Docker Compose · Kubernetes · Terraform · Azure-konfiguration
 
 ## Quick start
 
 ```bash
-# Lokalt, uden Docker (kræver Python 3.12+ og PostgreSQL):
+# Lokalt, uden Docker (kræver Python 3.12+ og PostgreSQL)
 uv venv && uv pip install -e . --group dev
 alembic upgrade head
 uvicorn agentops.api.main:app --reload
-# API-dokumentation: http://localhost:8000/docs
 
-# Med Docker Compose (virker i almindelige miljøer med normal internetadgang;
-# se "Kendte begrænsninger" nedenfor for hvorfor det IKKE kunne fuldføres i
-# selve udviklingsmiljøet):
+# API-dokumentation
+# http://localhost:8000/docs
+
+# Docker Compose
 docker compose up --build
 
-# Kør testsuiten:
-pytest tests -m "not integration" -q   # hurtige unit-tests
-pytest tests -m integration -q         # ægte subprocesser (MCP-server, Postgres)
+# Unit tests
+pytest tests -m "not integration" -q
 
-# Kør den reproducerbare demo (ingen API-nøgle nødvendig):
+# Integration tests
+pytest tests -m integration -q
+
+# Reproducerbar demo uden API-nøgle
 python scripts/run_demo.py
 
-# Kør evalueringsframeworket:
+# Deterministiske evals
 python scripts/run_evals.py --provider test
 ```
 
 ## Repository-struktur
 
-```
+```text
 src/agentops/
-  security/      sandboxing, command allowlist, secret-redaction
-  mcp_server/     MCP-serveren og dens developer tools
+  agent/          orchestrator, multi-agent workflow, skills og tool discovery
+  memory/         persistent agent-memory
+  mcp_server/     MCP-server og developer tools
   gateway/        provider-uafhængig LLM Gateway
-  agent/          orchestrator, multi-agent workflow, skills, tool discovery, risk
-  memory/         persistent agent-memory (udtræk, sanitisering, lager)
-  persistence/    SQLAlchemy-modeller (tasks, workflows, memory, evalueringer)
-  api/            FastAPI-applikationen (tasks-, workflows-, evaluerings-routere)
+  security/       sandbox, allowlist og secret redaction
   evaluation/     evalueringsframework
-  observability/  MLflow-tracing, struktureret logging
-evals/fixtures/    target-repositories til evalueringer
-demo_repo/         target-repository til den reproducerbare demo
+  observability/  MLflow-tracing og logging
+  persistence/    tasks, workflows, memory og evalueringer
+  api/            FastAPI-applikation
+
+evals/fixtures/    repositories til evaluering
+demo_repo/         repository til den reproducerbare demo
 migrations/        Alembic-migrations
-docs/              arkitektur, sikkerhed, ADR'er, eksperimenter, portfolio
-infrastructure/    Kubernetes-manifests og Terraform (Azure)
+docs/              arkitektur, security, ADR'er og eksperimenter
+infrastructure/    Kubernetes og Terraform
 ```
 
-## Security
+## Hvad projektet demonstrerer
 
-MCP-serveren har ingen generisk shell-adgang, al filsti-validering går
-gennem én sandbox-klasse, og højrisiko-handlinger kræver menneskelig
-godkendelse som standard. Fuld trusselsmodel, mitigations og kendte
-begrænsninger: [`docs/security.md`](docs/security.md).
+Projektet er bygget for at undersøge det samlede system omkring AI-agenter — ikke kun selve modellen.
 
-## Eksperimenter og erfaringer
+Det demonstrerer konkret, hvordan man kan:
 
-Målte forskelle mellem context-strategier samt fejl og designvalg fra udviklingen er dokumenteret i [`docs/experiments/lessons-learned.md`](docs/experiments/lessons-learned.md).
+1. give en agent kontrolleret adgang til udviklerværktøjer via MCP
+2. styre kontekst, skills og tool selection
+3. kræve menneskelig godkendelse af risikable handlinger
+4. koordinere flere kontrollerede faser omkring en kodeændring
+5. gemme og genbruge erfaringer mellem opgaver
+6. trace agentens handlinger og modelkald
+7. evaluere kvalitet, sikkerhed og effektivitet med reproducerbare tests
+8. holde modelleverandøren adskilt fra resten af platformarkitekturen
 
 ## Kendte begrænsninger
 
-- **Ingen reelle LLM-metrics.** Alle tal i `evals/results/` er produceret af
-  den deterministiske test-provider (ingen `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`
-  konfigureret i udviklingsmiljøet). `.github/workflows/evals-llm.yml` kører
-  samme suite mod Anthropic, når et repository secret er sat.
-- **`docker compose up --build` blev ikke fuldført i udviklingsmiljøet.**
-  `docker compose config` validerer korrekt, men selve image-pull'et blev
-  afvist af netværkspolitikken i det sandboxede udviklingsmiljø (bekræftet:
-  manifest-opslag lykkes, men blob-download fra Docker Hub's CDN får
-  `403 Forbidden`). Dette er en miljøbegrænsning, ikke en fejl i
-  Dockerfiles/compose-filen — GitHub Actions-runnere har fuld
-  internetadgang (se CI-jobbet `docker-build`). Se
-  [ADR-0008](docs/adr/0008-docker-uden-separat-mcp-service.md).
-- **`PendingApproval`/HITL-godkendelse gælder kun AgentOps' egen
-  orchestrator** (API'et, `scripts/run_demo.py`, evalueringerne). Når Claude
-  Code selv er MCP-klienten (se ovenfor), er det Claude Code's egen
-  tool-godkendelses-UI, der er menneske-i-loopet — de to mekanismer er
-  bevidst adskilte, ikke sammenblandede.
-- **Kubernetes/Terraform er statisk valideret, ikke deployet.** Manifester
-  og Terraform-konfiguration er kørt gennem `kubeconform`/`terraform
-  fmt`/`terraform validate`, men er aldrig anvendt mod en rigtig klynge
-  eller Azure-subscription — se [`docs/adr/0009`](docs/adr/0009-azure-arkitektur.md)
-  og [`docs/adr/0010`](docs/adr/0010-kubernetes-eller-ikke.md).
-- **Memory- og multi-agent-kvalitet er kun mekanisk verificeret.** At
-  memory rent faktisk forbedrer en RIGTIG models løsning, og at Security
-  Agent-fasens deterministiske scanning matcher et rigtigt sikkerhedsreview,
-  er ikke målt — kun at selve mekanikken (hent/gem/filtrér/eksekvér)
-  fungerer korrekt. Se `docs/experiments/lessons-learned.md`, punkt 8-9.
+- **Ingen real-LLM eval-resultater endnu.** De dokumenterede eval-tal kommer fra den deterministiske test-provider.
+- **Docker Compose blev ikke fuldt kørt i det oprindelige sandboxede udviklingsmiljø.** `docker compose config` blev valideret, mens image-download blev blokeret af miljøets netværkspolitik. CI indeholder et separat Docker-build-job.
+- **Kubernetes/Terraform er valideret, men ikke deployet til en rigtig Azure-infrastruktur.**
+- **Memory-kvalitet er mekanisk verificeret, ikke dokumenteret som en forbedring af en rigtig LLMs problemløsning.**
+- Når Claude Code bruges direkte som MCP-klient, håndteres tool approval af Claude Codes egen permission-UI. Platformens `PendingApproval` gælder AgentOps-orchestratoren.
+
+## Dokumentation
+
+- [Arkitektur](docs/architecture.md)
+- [Security og threat model](docs/security.md)
+- [MCP og Claude Code](docs/mcp.md)
+- [Eksperimenter og lessons learned](docs/experiments/lessons-learned.md)
+- [Portfolio og interview-noter](docs/portfolio.md)
+- [Architecture Decision Records](docs/adr/)
 
 ## Licens
 
-MIT — se [`LICENSE`](LICENSE).
+MIT — se [LICENSE](LICENSE).
