@@ -9,7 +9,7 @@ Coding agents bliver først praktisk anvendelige i en organisation, når adgang,
 ## Centrale funktioner
 
 - **Coding agent** der undersøger kode, bruger værktøjer, foreslår ændringer og validerer resultatet i et kontrolleret agent-loop.
-- **MCP-server** bygget med det officielle Python SDK. Ni udviklerværktøjer giver agenten kontrolleret adgang til ét repository uden generisk shell-adgang.
+- **MCP-server** bygget med det officielle Python SDK. 9 udviklerværktøjer giver agenten kontrolleret adgang til ét repository uden generisk shell-adgang.
 - **Provider-uafhængig LLM Gateway** med Anthropic, OpenAI og en deterministisk test-provider. Gatewayen håndterer routing, retries og kontrolleret fallback mellem konfigurerede produktionsprovidere. Se [ADR-0012](docs/adr/0012-gateway-fallback-adskillelse.md).
 - **Human-in-the-loop**: risikable handlinger, fx filændringer, sættes på pause og kræver eksplicit godkendelse via API'et.
 - **Persistent agent-memory** (deaktiveret som standard) gemmer korte, rensede erfaringer fra tidligere opgaver pr. workspace. Mistænkeligt indhold filtreres for at reducere risikoen for memory poisoning. Se [ADR-0013](docs/adr/0013-agent-memory.md).
